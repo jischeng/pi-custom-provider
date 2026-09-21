@@ -6,7 +6,7 @@ import { safeKeys } from "./domain/schema";
 import { withLockedFile } from "./domain/file-store";
 import {
   createModels,
-  type AuthInteraction,
+  type ProviderAuthInteraction,
   type Credential,
   type CredentialStore,
   type OAuthCredential,
@@ -232,7 +232,7 @@ export class Authentication {
   async login(config: ProviderConfig, context: OperationContext): Promise<OAuthCredential> {
     if (context.caller !== "user_client")
       throw new OperationError("USER_ACTION_REQUIRED", "A user must complete authentication.");
-    const interaction: AuthInteraction = {
+    const interaction: ProviderAuthInteraction = {
       signal: context.signal,
       prompt: (p) =>
         context.prompt(

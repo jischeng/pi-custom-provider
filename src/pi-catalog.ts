@@ -6,6 +6,28 @@ const RADIUS_API = "pi-messages" as KnownApi;
 export const API_CHOICES: KnownApi[] = loadApiChoices();
 export const OAUTH_PROVIDER_CHOICES: KnownProvider[] = loadOAuthProviderChoices();
 
+/** Include compatibility formats advertised by the Pi version actually hosting the extension. */
+export const THINKING_FORMAT_CHOICES: string[] = [
+  ...new Set([
+    "openai",
+    "openrouter",
+    "deepseek",
+    "together",
+    "zai",
+    "qwen",
+    "chat-template",
+    "qwen-chat-template",
+    "string-thinking",
+    "ant-ling",
+    ...providerCatalog
+      .builtinProviders()
+      .flatMap((provider) =>
+        provider.getModels().map((model) => (model.compat as Record<string, unknown> | undefined)?.thinkingFormat),
+      )
+      .filter((value): value is string => typeof value === "string"),
+  ]),
+];
+
 export function apiLabel(api: KnownApi): string {
   return humanizeId(api);
 }

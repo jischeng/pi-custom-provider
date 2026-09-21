@@ -675,3 +675,28 @@ test("invalid known compat fields identify the provider and field without exposi
     await f.dispose();
   }
 });
+
+test("discovery accepts runtime-advertised Baseten metadata without dropping the batch", async () => {
+  const { builtinProviders } = await import("@earendil-works/pi-ai/providers/all");
+  const native = builtinProviders()
+    .flatMap((provider) => provider.getModels())
+    .filter((model) => (model.compat as any)?.thinkingFormat === "baseten");
+  assert(native.length > 0, "The regression must exercise the runtime format missed by the old schema");
+  const f = fixture({
+    discovery: {
+      fetch: async () =>
+        new Response(JSON.stringify({ data: native.map((model) => ({ id: model.id })) }), { status: 200 }),
+    },
+  });
+  try {
+    await f.run("provider.create", values());
+    const opened = await f.run("draft.open", { providerId: "fixture" });
+    const d = opened.data;
+    const result = await f.run("model.discover", { draftId: d.draftId, revision: d.revision });
+    assert.equal(result.status, "succeeded", JSON.stringify(result.error));
+    assert(result.data.candidates.some((candidate: any) => candidate.model.compat?.thinkingFormat === "baseten"));
+    assert.deepEqual(result.data.selectedModelIds, ["m1"]);
+  } finally {
+    await f.dispose();
+  }
+});

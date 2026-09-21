@@ -1,6 +1,6 @@
 import { Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
-import { API_CHOICES } from "../pi-catalog";
+import { API_CHOICES, THINKING_FORMAT_CHOICES } from "../pi-catalog";
 import { OperationError } from "../operations/errors";
 export const object = (properties: Record<string, TSchema>, options = {}) =>
   Type.Object(properties, { additionalProperties: false, ...options });
@@ -70,20 +70,7 @@ export const compatSchema = object(
   {
     ...Object.fromEntries(bools.map((k) => [k, Type.Optional(Type.Boolean())])),
     maxTokensField: Type.Optional(enumOf(["max_completion_tokens", "max_tokens"])),
-    thinkingFormat: Type.Optional(
-      enumOf([
-        "openai",
-        "openrouter",
-        "deepseek",
-        "together",
-        "zai",
-        "qwen",
-        "chat-template",
-        "qwen-chat-template",
-        "string-thinking",
-        "ant-ling",
-      ]),
-    ),
+    thinkingFormat: Type.Optional(enumOf(THINKING_FORMAT_CHOICES)),
     cacheControlFormat: Type.Optional(Type.Literal("anthropic")),
     deferredToolsMode: Type.Optional(Type.Literal("kimi")),
     sessionAffinityFormat: Type.Optional(enumOf(["openai", "openai-nosession", "openrouter"])),

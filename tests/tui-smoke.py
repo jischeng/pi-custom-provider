@@ -48,8 +48,9 @@ try:
  choose('Save changes','Save configuration')
  pick(0,'Create provider')
  assert config()['providers']['pty-provider']['models'][0]['id']=='pty-model'
- choose('pty-provider','Type to search')
- choose('pty-model','Context window')
+ choose('pty-provider','pty-model')
+ assert 'Provider ID' not in ansi.sub('',output)
+ pick(0,'Context window')
  choose('Context window','external editor')
  edit('96000','Type to search')
  # Reopening the same editor must show the updated value rather than its initial value.
@@ -60,7 +61,7 @@ try:
  choose('Compatibility settings','Apply Compatibility settings')
  choose('Advanced JSON','external editor')
  edit('invalid-json','Invalid JSON')
- act(['\x03'],'Type to search')
+ act(['\x03'],'Compatibility settings')
  choose('Back to provider','Type to search')
  choose('Save changes','Save configuration')
  pick(0,'Create provider')
@@ -68,16 +69,20 @@ try:
  assert model['contextWindow']==96000 and model['reasoning'] is True
  # Rename with native settings/editor, then save.
  choose('pty-provider','Type to search')
+ choose('Provider settings','Provider ID')
  choose('Provider ID','external editor')
  edit('pty-renamed','Type to search')
+ choose('Back to models','Type to search')
  choose('Save changes','Save configuration')
  pick(0,'Create provider')
  assert 'pty-provider' not in config()['providers']
  assert 'pty-renamed' in config()['providers']
  before=config()
  choose('pty-renamed','Type to search')
+ choose('Provider settings','Provider ID')
  choose('Display name','external editor')
  edit('discard-me','Type to search')
+ choose('Back to models','Type to search')
  choose('Discard changes','Create provider')
  assert config()==before
  # Searchable native model selection toggles in place and remains unsaved until explicit save.

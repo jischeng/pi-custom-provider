@@ -20,7 +20,7 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
     const result = await operations.invoke(name, args, signal);
     if (result.status !== "succeeded")
       ctx.ui.notify(
-        `${result.error?.message || "Operation cancelled."}${result.effects.config === "committed" ? " Configuration saved." : ""}`,
+        `${operations.describe(name).title}: ${result.error?.message || "Operation cancelled."}${result.error?.fields?.length ? ` Fields: ${[...new Set(result.error.fields.map((field) => field.path))].join(", ")}.` : ""}${result.effects.config === "committed" ? " Configuration saved." : ""}`,
         result.status === "failed" ? "error" : "info",
       );
     for (const warning of result.warnings) ctx.ui.notify(warning.message, "warning");
@@ -96,11 +96,30 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
     try {
       while (draft && !signal?.aborted) {
         const actions: Action[] = [
+          ...draft.values.models.map((m: any) => ({
+            id: `model:${m.id}`,
+            label: m.name || m.id,
+            value: `${m.contextWindow || "Default"} context`,
+            description: `${draft.values.id} · ${m.id}`,
+          })),
+          { id: "$add", label: "Add model", description: "Enter a model ID manually." },
           {
-            id: "$auth",
-            label: "Authentication method",
-            value: draft.values.auth.mode,
-            description: "Choose an authentication method for this provider.",
+            id: "$discover",
+            label: "Discover models",
+            value: `${draft.candidates.length} candidates`,
+            description: "Fetch available models from this provider.",
+          },
+          {
+            id: "$models",
+            label: "Select models",
+            value: `${draft.values.models.length} selected`,
+            description: "Search candidates and toggle models in place.",
+          },
+          {
+            id: "$settings",
+            label: "Provider settings",
+            value: draft.values.id,
+            description: "Edit provider ID, endpoint, API and authentication method.",
           },
           ...(stored
             ? [
@@ -110,29 +129,6 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
                   value: stored.auth.status,
                   description: "Sign in, set a key, or clear stored credentials.",
                 },
-              ]
-            : []),
-          {
-            id: "$discover",
-            label: "Discover models",
-            value: `${draft.candidates.length} candidates`,
-            description: "Fetch models from this provider. No configuration is saved.",
-          },
-          {
-            id: "$models",
-            label: "Select models",
-            value: `${draft.values.models.length} selected`,
-            description: "Search candidates and toggle models in place.",
-          },
-          ...draft.values.models.map((m: any) => ({
-            id: `model:${m.id}`,
-            label: m.name || m.id,
-            value: `${m.contextWindow || "Default"} context`,
-            description: `Edit model: ${m.id}`,
-          })),
-          { id: "$add", label: "Add model", description: "Enter a model ID manually." },
-          ...(stored
-            ? [
                 {
                   id: "$headers",
                   label: "Request headers",
@@ -140,12 +136,7 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
                 },
               ]
             : []),
-          {
-            id: "$save",
-            label: "Save changes",
-            value: "Write configuration",
-            description: `Save ${draft.values.id} and sync models to Pi.`,
-          },
+          { id: "$save", label: "Save changes", description: `Save ${draft.values.id} and sync models to Pi.` },
           { id: "$discard", label: "Discard changes", description: "Return without saving this draft." },
           ...(stored
             ? [
@@ -158,25 +149,32 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
               ]
             : []),
         ];
-        const action = await settingsPanel(
-          ctx,
-          fields(providerSchema, draft.values, ["models", "auth"]),
-          actions,
-          async (id, value) => {
-            const next = await call("draft.patch", {
-              ...ref(),
-              set: value === cleared ? {} : { [id]: value },
-              ...(value === cleared ? { unset: [id] } : {}),
-            });
-            if (next) draft = next;
-            return draft.values[id];
-          },
-          signal,
-        );
+        const action = await settingsPanel(ctx, [], actions, async () => undefined, signal);
         if (!action || action === "$discard") break;
-        if (action === "$auth") {
-          const auth = await chooseAuth(call, ctx, draft.values.api, signal);
-          if (auth) draft = (await call("draft.patch", { ...ref(), set: { auth } })) || draft;
+        if (action === "$settings") {
+          while (!signal?.aborted) {
+            const setting = await settingsPanel(
+              ctx,
+              fields(providerSchema, draft.values, ["models", "auth"]),
+              [
+                { id: "$auth", label: "Authentication method", value: draft.values.auth.mode },
+                { id: "$back", label: "Back to models" },
+              ],
+              async (id, value) => {
+                const next = await call("draft.patch", {
+                  ...ref(),
+                  set: value === cleared ? {} : { [id]: value },
+                  ...(value === cleared ? { unset: [id] } : {}),
+                });
+                if (next) draft = next;
+                return draft.values[id];
+              },
+              signal,
+            );
+            if (setting !== "$auth") break;
+            const auth = await chooseAuth(call, ctx, draft.values.api, signal);
+            if (auth) draft = (await call("draft.patch", { ...ref(), set: { auth } })) || draft;
+          }
         } else if (action === "$credentials" || action === "$headers") {
           if (draft.revision !== initialRevision) {
             ctx.ui.notify("Save or discard your changes before updating stored credentials or headers.", "warning");

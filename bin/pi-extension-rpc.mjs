@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { piCliPath } from "./pi-cli-path.mjs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
@@ -12,7 +13,7 @@ const commands = new Set([
   "cancel_extension_operation",
   "respond_extension_interaction",
 ]);
-const cli = fileURLToPath(new URL("cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
+const cli = piCliPath;
 const extension = fileURLToPath(new URL("../src/rpc/extension.ts", import.meta.url));
 const child = spawn(process.execPath, [cli, "--mode", "rpc", "-e", extension, ...process.argv.slice(2)], {
   stdio: ["pipe", "pipe", "pipe", "ipc"],

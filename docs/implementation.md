@@ -1,6 +1,6 @@
 # 实现和验证记录
 
-2026-09-21。基线为 Pi 0.82.0 / TypeBox 1.3.8，包中的 peer dependencies 已固定。原始设计见 [需求](refactor-requirements.md)，可供客户端使用的实际协议见 [RPC v1](rpc.md)。
+2026-09-21。当前验证基线为 Pi 0.85.1 / TypeBox 1.3.8，包中的 peer dependencies 已固定。此前 0.82.0 的接口审计保留作为历史记录；新增发现故障与实际运行版本的验证见 [运行版本复现记录](runtime-discovery-fix.md)。原始设计见 [需求](refactor-requirements.md)，可供客户端使用的实际协议见 [RPC v1](rpc.md)。
 
 ## 已实现
 

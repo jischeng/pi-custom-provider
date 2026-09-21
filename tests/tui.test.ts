@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+const piManifestUrl = new URL("../package.json", import.meta.resolve("@earendil-works/pi-coding-agent"));
+const piCli = fileURLToPath(new URL(JSON.parse(readFileSync(piManifestUrl, "utf8")).bin.pi, piManifestUrl));
 import { API_CHOICES } from "../src/pi-catalog";
 import { repo } from "./rpc-helper";
 test("real Pi native terminal controls: create, edit, discard and delete", { timeout: 90000 }, async () => {
@@ -12,7 +15,7 @@ test("real Pi native terminal controls: create, edit, discard and delete", { tim
       `${repo}/tests/tui-smoke.py`,
       JSON.stringify({
         node: process.execPath,
-        cli: fileURLToPath(new URL("cli.js", import.meta.resolve("@earendil-works/pi-coding-agent"))),
+        cli: process.env.PI_TEST_CLI || piCli,
         repo,
         apiIndex: API_CHOICES.indexOf("openai-completions"),
       }),

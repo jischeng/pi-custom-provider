@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+const piManifestUrl = new URL("../package.json", import.meta.resolve("@earendil-works/pi-coding-agent"));
+const piCli = fileURLToPath(new URL(JSON.parse(readFileSync(piManifestUrl, "utf8")).bin.pi, piManifestUrl));
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,9 +13,7 @@ export async function rpc(bridge = true, extra: string[] = [], initialConfig?: u
   for (const dir of ["home", "agent", "cwd"]) fs.mkdirSync(path.join(root, dir));
   if (initialConfig !== undefined)
     fs.writeFileSync(path.join(root, "agent/models.json"), JSON.stringify(initialConfig));
-  const cli = bridge
-    ? path.join(repo, "bin/pi-extension-rpc.mjs")
-    : fileURLToPath(new URL("cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
+  const cli = bridge ? path.join(repo, "bin/pi-extension-rpc.mjs") : piCli;
   const args = [
     cli,
     ...(!bridge ? ["--mode", "rpc"] : []),

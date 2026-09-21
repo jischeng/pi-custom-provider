@@ -2,7 +2,7 @@
 
 [English](README.md) · 中文
 
-为 Pi 0.82.0 管理自定义供应商、模型和认证。终端、RPC 客户端和模型工具共用同一套业务逻辑。
+为 Pi 0.85.1 管理自定义供应商、模型和认证。终端、RPC 客户端和模型工具共用同一套业务逻辑。
 
 ## 终端使用
 
@@ -14,6 +14,8 @@ pnpm exec pi -e ./src/index.ts
 ```
 
 进入 Pi 后执行 `/provider-setup`。界面使用英文。设置和模型选择复用 Pi 的 `SettingsList`，可直接搜索、查看当前值和切换选项；预填编辑使用 `ExtensionEditorComponent`，进度使用 `BorderedLoader`。`ctx.ui.custom` 仅挂载这些原生组件，没有自绘或自定义按键处理。
+
+进入已有供应商会直接列出模型，选中模型即可编辑。供应商字段在 `Provider settings` 中。
 
 1. 新增供应商，填写 API 类型、接口地址、ID 和认证方式。
 2. 添加模型，或先保存供应商，再从 `Credentials`设置 API Key、登录 OAuth 或导入 OAuth JSON。
@@ -71,11 +73,11 @@ pnpm test
 pnpm pack:check
 ```
 
-测试使用临时目录、真实 Pi 0.82.0 子进程、本地 HTTP 服务和假 OAuth，不读取个人配置。终端测试需要 Python 3 和支持 PTY 的系统。
+测试使用临时目录、真实 Pi 0.85.1 子进程、本地 HTTP 服务和假 OAuth，不读取个人配置。终端测试需要 Python 3 和支持 PTY 的系统。
 
 - [实现及验证记录](docs/implementation.md)
 - [原始需求与设计](docs/refactor-requirements.md)
-- [Pi 0.82.0 接口核对及更正](docs/pi-0.82.0-interface-audit.md)
+- [Pi 0.85.1 接口核对及更正](docs/pi-0.85.1-interface-audit.md)
 
 未修改 Pi 上游或 Pixle，尚未对接实际原生客户端；客户端可以按公开协议独立适配。
 

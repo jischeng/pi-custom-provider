@@ -47,16 +47,18 @@
     "image": "https://raw.githubusercontent.com/d4rw1nz/pi-custom-provider/main/assets/cover.png"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "0.82.0",
-    "@earendil-works/pi-coding-agent": "0.82.0",
-    "@earendil-works/pi-tui": "0.82.0",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
     "typebox": "1.3.8"
   },
   "pnpm": {
     "onlyBuiltDependencies": []
   },
   "devDependencies": {
-    "@earendil-works/pi-tui": "0.82.0",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
     "@types/node": "24.12.4",
     "@types/proper-lockfile": "4.1.4",
     "prettier": "3.6.2",
