@@ -11,9 +11,9 @@ pnpm install --frozen-lockfile
 pnpm exec pi -e ./src/index.ts
 ```
 
-Run `/provider-setup`. The English UI uses Pi's native `SettingsList` for searchable provider settings and in-place model toggles, `ExtensionEditorComponent` for prefilled editing, and `BorderedLoader` for progress. `ctx.ui.custom` only mounts those existing components. There is no custom terminal renderer or key handler.
+Run `/provider-setup`. The English UI uses Pi's native `SettingsList` for searchable provider settings and in-place model toggles, `ExtensionEditorComponent` for prefilled editing, and `BorderedLoader` for progress. `Container`, `Text`, and `Spacer` provide page headings and layout; keyboard input goes directly to the native list. `ctx.ui.custom` only mounts those existing components. There is no custom terminal renderer or key handler.
 
-Opening a provider shows its models immediately; selecting a model opens its fields. Provider-level fields live under `Provider settings`. Create a provider, choose its API and authentication method, and add models. Save the provider before configuring credentials, then reopen it to discover models. Review model metadata or apply a complete Pi preset and explicitly save. Discarding a draft does not write configuration.
+Opening a provider shows its identity and model list immediately. Model IDs stay visible even when display names match; selecting a model opens its fields directly. The models page contains only models, `Add model…`, and `Provider actions…`. Discovery, selection, provider settings, credentials, save, discard and deletion live in that separate action menu. Only editable settings use a value column; navigation does not show metadata summaries. Create a provider, choose its API and authentication method, and add models. Save the provider before configuring credentials, then reopen it to discover models. Review model metadata or apply a complete Pi preset and explicitly save. Discarding a draft does not write configuration.
 
 The interface supports provider renaming, model selection with native search and scrolling, full model metadata including cost tiers, optional-field removal, compatibility settings, and write-only provider/model headers. Changes immediately synchronize with Pi. Switch the active model before renaming or deleting its provider or removing that model.
 

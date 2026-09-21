@@ -15,11 +15,11 @@ pnpm exec pi -e ./src/index.ts
 
 进入 Pi 后执行 `/provider-setup`。界面使用英文。设置和模型选择复用 Pi 的 `SettingsList`，可直接搜索、查看当前值和切换选项；预填编辑使用 `ExtensionEditorComponent`，进度使用 `BorderedLoader`。`ctx.ui.custom` 仅挂载这些原生组件，没有自绘或自定义按键处理。
 
-进入已有供应商会直接列出模型，选中模型即可编辑。供应商字段在 `Provider settings` 中。
+进入已有供应商会直接列出模型，选中模型即可编辑。页头显示当前供应商，列表按模型 ID 区分同名模型。模型页只保留模型、`Add model…` 和 `Provider actions…`；发现模型、选择模型、供应商设置、认证、保存、丢弃和删除都在单独的操作菜单里。导航项不再附带 context、候选数或认证状态摘要。
 
 1. 新增供应商，填写 API 类型、接口地址、ID 和认证方式。
 2. 添加模型，或先保存供应商，再从 `Credentials`设置 API Key、登录 OAuth 或导入 OAuth JSON。
-3. 编辑配置并发现模型。候选区支持原生搜索、滚动和逐项勾选，目录推荐会标明来源。
+3. 编辑配置并发现模型。候选区支持原生搜索、滚动和逐项勾选，模型 ID 始终可见。
 4. 编辑模型字段、应用 Pi 模型预设，然后明确选择 `Save changes`。丢弃草稿不会保存修改。
 5. 在 Pi 的模型选择器中选择模型。
 

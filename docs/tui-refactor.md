@@ -2,7 +2,7 @@
 
 ## Thesis
 
-Replace the procedural menu wizard with a native settings editor. Provider and model operations belong to the domain; TUI, RPC, and agent tools are adapters over that contract. UI labels and errors are English.
+Use an identified provider/model browser, with a separate action menu and native settings editors. Provider and model operations belong to the domain; TUI, RPC, and agent tools are adapters over that contract. UI labels and errors are English.
 
 ## Confidence
 
@@ -17,7 +17,7 @@ The previous implementation treated “native” as “call select repeatedly.�
 - `domain/` owns configuration validation, draft revisions, discovery, credentials, writes, and runtime synchronization.
 - `operations/` owns execution, results, cancellation, and interaction messages. Descriptors contain JSON schemas and no executable functions.
 - `ui.ts` consumes an operation client and renders workflows from descriptors and results. It imports neither domain services nor file storage.
-- `ui/components.ts` composes Pi components. SettingsList owns search, scrolling, values, nested settings, and key handling. ExtensionEditorComponent owns prefilled editing. No component subclass, renderer, border drawing, or key parser is implemented here.
+- `ui/components.ts` composes Pi components. Native Container/Text/Spacer compose the provider identity and page heading. SettingsList owns search, scrolling, values, nested settings, and key handling. The container forwards unchanged keyboard input directly to its native list. ExtensionEditorComponent owns prefilled editing. No component subclass, renderer, border drawing, or key parser is implemented here.
 - `ui/operations.ts` adapts local operations to native progress and authentication dialogs. RPC independently adapts the same definitions through `rpc/extension.ts`.
 
 `ctx.ui.custom` is only the mounting API for existing Pi components. Its name does not imply a custom renderer. The complete Pi ModelSelectorComponent requires host-internal ModelRuntime/SettingsManager objects; it is not used as a fake draft-model selector.
@@ -65,6 +65,10 @@ This direction fails if a business operation needs a TUI session, the settings s
 | Serialize pending screen edits | Explicit completion queue | Save cannot outrun a field update; rejected edits show stored values | Rapid input and validation failures |
 | Restore English product copy | Update labels and assertions | Matches the existing Pi UI and the user's language preference | Reload |
 
-## Validation result
+## Review of the flat provider page
 
-35 tests pass, including real Pi RPC/PTY and native component lifecycle tests. Type checking, frozen dependency installation, package contents, and Git whitespace checks pass. Tests use isolated temporary homes, local HTTP fixtures, and fake credentials. No personal configuration or credentials were rewritten.
+The provider page mixed model entities with nine management commands and no heading. Its value column showed context sizes, candidate counts and authentication state, none of which were editable values. Model IDs appeared only in the selected-row description. Reordering the same rows did not resolve that confusion.
+
+The page now shows provider identity, a Models heading and models identified by ID, followed by Add model and Provider actions. The separate action menu contains only commands, with no metadata value column. Existing models remain directly accessible. Provider and model settings retain real editable values. This adds one step for management commands, while removing them from the model list; it does not add a step to open a model.
+
+The review rejects both fake selectable section headings and a custom grouped-list renderer: neither is necessary to provide this structure. Tests exercise same-name models through the actual native components and shared service, including search, direct model entry, action-menu cancellation and return to the correct provider. The real Pi PTY test exercises editing, save, rename, selection, discard and deletion. RPC tests independently verify the unchanged programmatic operations. All fixtures use isolated configuration and fake credentials.

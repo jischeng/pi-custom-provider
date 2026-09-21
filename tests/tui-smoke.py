@@ -34,6 +34,9 @@ def config():
  with open(root+'/agent/models.json') as f: return json.load(f)
 def choose(query,label): act(['\x15',query.replace(' ',''),'\r'],label)
 def edit(value,label): act(['\x01','\x0b',value,'\r'],label)
+def manage(query,label):
+ choose('Provider actions','Discover models')
+ choose(query,label)
 try:
  wait('pi v')
  act(['/provider-setup','\r'],'Create provider')
@@ -45,11 +48,15 @@ try:
  # Settings show existing values; search goes directly to the requested field/action.
  choose('Add model','Model ID')
  input('pty-model','Type to search')
- choose('Save changes','Save configuration')
+ manage('Save changes','Save configuration')
  pick(0,'Create provider')
  assert config()['providers']['pty-provider']['models'][0]['id']=='pty-model'
  choose('pty-provider','pty-model')
- assert 'Provider ID' not in ansi.sub('',output)
+ wait('Provider actions')
+ page=ansi.sub('',output)
+ assert 'Provider: pty-provider' in page and 'Models' in page
+ assert 'Provider settings' not in page and 'Save changes' not in page
+ assert 'Provider ID' not in page.rsplit('Provider: pty-provider',1)[-1]
  pick(0,'Context window')
  choose('Context window','external editor')
  edit('96000','Type to search')
@@ -63,43 +70,43 @@ try:
  edit('invalid-json','Invalid JSON')
  act(['\x03'],'Compatibility settings')
  choose('Back to provider','Type to search')
- choose('Save changes','Save configuration')
+ manage('Save changes','Save configuration')
  pick(0,'Create provider')
  model=config()['providers']['pty-provider']['models'][0]
  assert model['contextWindow']==96000 and model['reasoning'] is True
  # Rename with native settings/editor, then save.
  choose('pty-provider','Type to search')
- choose('Provider settings','Provider ID')
+ manage('Provider settings','Provider ID')
  choose('Provider ID','external editor')
  edit('pty-renamed','Type to search')
  choose('Back to models','Type to search')
- choose('Save changes','Save configuration')
+ manage('Save changes','Save configuration')
  pick(0,'Create provider')
  assert 'pty-provider' not in config()['providers']
  assert 'pty-renamed' in config()['providers']
  before=config()
  choose('pty-renamed','Type to search')
- choose('Provider settings','Provider ID')
+ manage('Provider settings','Provider ID')
  choose('Display name','external editor')
  edit('discard-me','Type to search')
  choose('Back to models','Type to search')
- choose('Discard changes','Create provider')
+ manage('Discard changes','Create provider')
  assert config()==before
  # Searchable native model selection toggles in place and remains unsaved until explicit save.
  choose('pty-renamed','Type to search')
- choose('Select models','Apply selection')
+ manage('Select models','Apply selection')
  choose('pty-model','No')
  choose('Apply selection','Type to search')
- choose('Save changes','Save configuration')
+ manage('Save changes','Save configuration')
  pick(0,'Create provider')
  assert config()['providers']['pty-renamed']['models']==[]
  choose('pty-renamed','Type to search')
- choose('Delete provider','Existing credentials will be retained')
+ manage('Delete provider','Existing credentials will be retained')
  pick(1,'Type to search')
- choose('Discard changes','Create provider')
+ manage('Discard changes','Create provider')
  assert 'pty-renamed' in config()['providers']
  choose('pty-renamed','Type to search')
- choose('Delete provider','Existing credentials will be retained')
+ manage('Delete provider','Existing credentials will be retained')
  pick(0,'Create provider')
  assert config()['providers']=={}
  print('Native Pi PTY: searchable settings, prefilled editor, inline toggles, model selection, save, rename, discard and deletion passed')

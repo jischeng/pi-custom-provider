@@ -1,5 +1,13 @@
 import { ExtensionEditorComponent, getSettingsListTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { SettingsList, type SettingItem, type Component, type TUI } from "@earendil-works/pi-tui";
+import {
+  Container,
+  Spacer,
+  Text,
+  SettingsList,
+  type SettingItem,
+  type Component,
+  type TUI,
+} from "@earendil-works/pi-tui";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 
 // No rendering or keyboard implementation: all components below are provided by Pi.
@@ -12,6 +20,7 @@ export type Field = {
   allowDefault?: boolean;
 };
 export type Action = { id: string; label: string; value?: string; description?: string };
+export type PanelHeading = { context?: string; title: string; description?: string };
 const cleared = Symbol("cleared");
 export { cleared };
 export const displayValue = (value: any): string =>
@@ -189,10 +198,11 @@ export async function settingsPanel(
   actions: Action[],
   onEdit: (id: string, value: any) => Promise<any>,
   signal?: AbortSignal,
+  heading?: PanelHeading,
 ): Promise<string | undefined> {
   let queue = Promise.resolve();
   let chosen: string | undefined;
-  await ctx.ui.custom<void>((tui, _theme, keys, done) => {
+  await ctx.ui.custom<void>((tui, theme, keys, done) => {
     let closed = false;
     const finish = (action?: string) => {
       if (closed) return;
@@ -245,18 +255,35 @@ export async function settingsPanel(
     );
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) queueMicrotask(abort);
-    return list;
+    if (!heading) return list;
+    const panel = new Container();
+    if (heading.context) {
+      panel.addChild(new Text(theme.fg("accent", theme.bold(heading.context)), 1, 0));
+      panel.addChild(new Spacer(1));
+    }
+    panel.addChild(new Text(theme.bold(heading.title), 1, 0));
+    if (heading.description) panel.addChild(new Text(heading.description, 1, 0));
+    panel.addChild(new Spacer(1));
+    panel.addChild(list);
+    // Forward unchanged input to Pi; the stock container owns layout and mouse dispatch.
+    return Object.assign(panel, { handleInput: list.handleInput.bind(list) });
   });
   await queue;
   return chosen;
 }
 
-export async function selectModels(ctx: ExtensionContext, candidates: any[], ids: string[], signal?: AbortSignal) {
+export async function selectModels(
+  ctx: ExtensionContext,
+  candidates: any[],
+  ids: string[],
+  signal?: AbortSignal,
+  context?: string,
+) {
   const selected = new Set(ids);
   const fields = candidates.map((item) => ({
     id: `model:${item.model.id}`,
-    label: item.model.name || item.model.id,
-    description: `${item.model.id} · ${item.source} · ${item.availability}`,
+    label: item.model.id,
+    description: `${item.model.name || item.model.id}\nModel ID: ${item.model.id}`,
     schema: { type: "boolean" },
     allowDefault: false,
     value: selected.has(item.model.id),
@@ -272,6 +299,7 @@ export async function selectModels(ctx: ExtensionContext, candidates: any[], ids
       return selected.has(modelId);
     },
     signal,
+    { context, title: "Select models" },
   );
   return action === "$apply" ? [...selected] : undefined;
 }

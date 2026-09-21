@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Result } from "./operations/types";
 import type { ProviderOperations } from "./ui/operations";
-import { cleared, settingsPanel, selectModels, type Field, type Action } from "./ui/components";
+import { cleared, settingsPanel, selectModels, type Field } from "./ui/components";
 
 type Call = (name: string, args: unknown) => Promise<any>;
 const fields = (schema: any, values: any, omit: string[] = []): Field[] =>
@@ -53,13 +53,13 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
         { id: "$create", label: "Create provider", description: "Add a provider. Type to search existing providers." },
         ...providers.map((p: any) => ({
           id: p.id,
-          label: p.name || p.id,
-          value: `${p.modelCount} models · ${p.auth.status}`,
-          description: `${p.id} · ${p.baseUrl}`,
+          label: p.name && p.name !== p.id ? `${p.id} (${p.name})` : p.id,
+          description: `Provider ID: ${p.id}`,
         })),
       ],
       async () => undefined,
       signal,
+      { title: "Providers" },
     );
     if (!choice) return;
     let draft: any;
@@ -95,61 +95,55 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
     };
     try {
       while (draft && !signal?.aborted) {
-        const actions: Action[] = [
-          ...draft.values.models.map((m: any) => ({
-            id: `model:${m.id}`,
-            label: m.name || m.id,
-            value: `${m.contextWindow || "Default"} context`,
-            description: `${draft.values.id} · ${m.id}`,
-          })),
-          { id: "$add", label: "Add model", description: "Enter a model ID manually." },
+        const providerContext = `Provider: ${draft.values.id}`;
+        let action = await settingsPanel(
+          ctx,
+          [],
+          [
+            ...draft.values.models.map((m: any) => ({
+              id: `model:${m.id}`,
+              label: m.name && m.name !== m.id ? `${m.id} (${m.name})` : m.id,
+              description: `Model ID: ${m.id}${m.name && m.name !== m.id ? `\n${m.name}` : ""}`,
+            })),
+            { id: "$add", label: "Add model…" },
+            {
+              id: "$manage",
+              label: "Provider actions…",
+            },
+          ],
+          async () => undefined,
+          signal,
           {
-            id: "$discover",
-            label: "Discover models",
-            value: `${draft.candidates.length} candidates`,
-            description: "Fetch available models from this provider.",
+            context: providerContext,
+            title: "Models",
+            ...(draft.values.models.length ? {} : { description: "No models added." }),
           },
-          {
-            id: "$models",
-            label: "Select models",
-            value: `${draft.values.models.length} selected`,
-            description: "Search candidates and toggle models in place.",
-          },
-          {
-            id: "$settings",
-            label: "Provider settings",
-            value: draft.values.id,
-            description: "Edit provider ID, endpoint, API and authentication method.",
-          },
-          ...(stored
-            ? [
-                {
-                  id: "$credentials",
-                  label: "Credentials",
-                  value: stored.auth.status,
-                  description: "Sign in, set a key, or clear stored credentials.",
-                },
-                {
-                  id: "$headers",
-                  label: "Request headers",
-                  description: "Edit stored headers. Values are never displayed.",
-                },
-              ]
-            : []),
-          { id: "$save", label: "Save changes", description: `Save ${draft.values.id} and sync models to Pi.` },
-          { id: "$discard", label: "Discard changes", description: "Return without saving this draft." },
-          ...(stored
-            ? [
-                {
-                  id: "$delete",
-                  label: "Delete provider",
-                  value: stored.id,
-                  description: "Delete configuration and models. Existing credentials will be retained.",
-                },
-              ]
-            : []),
-        ];
-        const action = await settingsPanel(ctx, [], actions, async () => undefined, signal);
+        );
+        if (action === "$manage") {
+          action = await settingsPanel(
+            ctx,
+            [],
+            [
+              { id: "$discover", label: "Discover models" },
+              { id: "$models", label: "Select models" },
+              { id: "$settings", label: "Provider settings" },
+              ...(stored
+                ? [
+                    { id: "$credentials", label: "Credentials" },
+                    { id: "$headers", label: "Request headers" },
+                  ]
+                : []),
+              { id: "$save", label: "Save changes" },
+              { id: "$discard", label: "Discard changes" },
+              ...(stored ? [{ id: "$delete", label: "Delete provider" }] : []),
+              { id: "$back", label: "Back to models" },
+            ],
+            async () => undefined,
+            signal,
+            { context: providerContext, title: "Provider actions" },
+          );
+          if (!action || action === "$back") continue;
+        }
         if (!action || action === "$discard") break;
         if (action === "$settings") {
           while (!signal?.aborted) {
@@ -170,6 +164,7 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
                 return draft.values[id];
               },
               signal,
+              { context: providerContext, title: "Provider settings" },
             );
             if (setting !== "$auth") break;
             const auth = await chooseAuth(call, ctx, draft.values.api, signal);
@@ -190,7 +185,7 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
           const next = await call("model.discover", ref());
           if (next) draft = next;
         } else if (action === "$models") {
-          const ids = await selectModels(ctx, draft.candidates, draft.selectedModelIds, signal);
+          const ids = await selectModels(ctx, draft.candidates, draft.selectedModelIds, signal, providerContext);
           if (ids) draft = (await call("draft.selectModels", { ...ref(), modelIds: ids })) || draft;
         } else if (action === "$add") {
           const id = await ctx.ui.input("Model ID", undefined, { signal });
@@ -202,8 +197,8 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
             ctx,
             fields(modelSchema, model, ["id"]),
             [
-              { id: "$preset", label: "Apply model preset", value: modelId },
-              { id: "$remove", label: "Remove model", value: modelId },
+              { id: "$preset", label: "Apply model preset" },
+              { id: "$remove", label: "Remove model" },
               { id: "$back", label: "Back to provider" },
             ],
             async (id, value) => {
@@ -218,6 +213,7 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
               return model[id];
             },
             signal,
+            { context: providerContext, title: `Model: ${modelId}` },
           );
           if (modelAction === "$remove") draft = (await call("draft.removeModel", { ...ref(), modelId })) || draft;
           else if (modelAction === "$preset") {
