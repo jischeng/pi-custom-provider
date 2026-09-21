@@ -1,135 +1,80 @@
 # pi-custom-provider
 
-![Pi Custom Provider 封面](https://raw.githubusercontent.com/d4rw1nz/pi-custom-provider/main/assets/cover.png)
-
 [English](README.md) · 中文
 
-> 在 Pi 中配置任意自定义 LLM 接口，无需手动编辑 `models.json`。
+为 Pi 0.82.0 管理自定义供应商、模型和认证。终端、RPC 客户端和模型工具共用同一套业务逻辑。
 
-## 简介
+## 终端使用
 
-`pi-custom-provider` 是一个 Pi 交互式扩展，用来添加和维护自定义 LLM Provider。它支持 OpenAI 兼容接口、由 Pi Catalog 驱动的 API 类型、模型发现、模型元数据、兼容性配置、API Key，以及 Pi 支持的 OAuth 流程。
-
-## 安装
-
-安装 npm 最新版本：
+在仓库中运行：
 
 ```bash
-pi install npm:@d4rw1nz/pi-custom-provider
+pnpm install --frozen-lockfile
+pnpm exec pi -e ./src/index.ts
 ```
 
-安装指定版本：
+进入 Pi 后执行 `/provider-setup`。所有选择、输入、JSON 编辑、确认和通知均使用 **Pi 原生 `ctx.ui` 控件**；没有自绘终端组件或自定义按键处理。
+
+1. 新增供应商，填写 API 类型、接口地址、ID 和认证方式。
+2. 添加模型，或先保存供应商，再从“配置认证”设置 API Key、登录 OAuth 或导入 OAuth JSON。
+3. 编辑配置并发现模型。候选区支持过滤、分页、全选和取消选择，目录推荐会标明来源。
+4. 编辑模型字段、应用 Pi 模型预设，然后明确选择“保存”。丢弃草稿不会保存修改。
+5. 在 Pi 的模型选择器中选择模型。
+
+支持显示名称、改名、模型增删、价格及价格分档、思考等级、兼容配置，以及供应商和模型的请求 Header。可清除可选字段。保存后立即同步到 Pi；当前对话正在使用的供应商不能改名、删除或移除当前模型。
+
+认证输入使用 Pi 原生输入框，输入内容可见，界面会明确提示。已存凭据不会回填。服务端 OAuth 文件引用的自动刷新会写回该文件；重新登录、导入或清除后会移除旧引用。更换接口地址、API 或认证方式会解除旧凭据和 Header 的关联，需要重新配置。
+
+## 给客户端适配的 RPC
+
+仓库中启动：
 
 ```bash
-pi install npm:@d4rw1nz/pi-custom-provider@1.0.6
+pnpm rpc --no-session
 ```
 
-只在当前会话试用，不修改持久化配置：
+也可直接运行，参数不需要额外的 `--`：
 
 ```bash
-pi -e npm:@d4rw1nz/pi-custom-provider
+node bin/pi-extension-rpc.mjs -e ./src/index.ts --no-session
 ```
 
-安装后重启 Pi，然后执行：
+包中的通用可执行文件名为 `pi-extension-rpc`。它启动真正的 Pi RPC 子进程，保留原有命令，并增加通用扩展操作接口。**原版 `pi --mode rpc` 不包含这些新增命令。**
 
-```text
-/provider-setup
+客户端先发送：
+
+```json
+{"id":"catalog","type":"get_extension_operations"}
 ```
 
-## 快速开始
+再根据返回的操作名及 JSON Schema 直接调用，例如：
 
-1. 在 Pi 中执行 `/provider-setup`。
-2. 选择 **Create New Provider**。
-3. 选择 API 类型。大多数 OpenAI 兼容服务选择 `openai-completions`。
-4. 输入 Base URL，例如 `https://example.com/v1`。
-5. 输入 Provider ID，例如 `my-llm`。
-6. 普通自定义接口选择 **API Key**；只有确实要使用对应 OAuth 流程时才选择 GitHub Copilot 或 OpenRouter 等 OAuth Provider。
-7. 输入 API Key，或完成 OAuth 配置。
-8. 等待模型发现，选择要使用的模型，按 Enter 保存。
-9. 在 Pi 中选择模型并开始使用。
-
-## 使用流程
-
-```text
-/provider-setup
-  ├─ 新建 Provider
-  ├─ API Type
-  ├─ Base URL
-  ├─ Provider ID
-  ├─ 认证方式
-  │   ├─ API Key
-  │   └─ OAuth Provider → OAuth JSON / Pi OAuth 登录
-  ├─ 发现模型
-  ├─ 选择模型
-  ├─ 编辑模型信息（可选）
-  └─ 检查并保存
+```json
+{"id":"list","type":"invoke_extension_operation","operation":"provider-manager/provider.list","arguments":{"limit":50},"requestId":"list-1"}
 ```
 
-编辑已有 Provider：
+调用返回任务 ID，后续事件返回结构化结果；也可查询、取消和提交必要的认证输入。普通管理操作不执行终端向导，不发送 select/input 弹窗，也不调用模型。其他插件可通过同一注册机制公开操作，传输代码不识别供应商插件名称。
 
-```text
-选择 Provider → Edit Config → 修改 Provider 配置 → 选择模型
-```
+完整请求、响应、注册示例及客户端约定见 [RPC 协议](docs/rpc.md)。
 
-## 认证说明
+## 模型工具
 
-对于自定义 OpenAI 兼容接口，应选择 **API Key**。
+模型可查询供应商、查看目录、发现和推荐模型。新增、修改、删除、保存模型需要用户通过 Pi 原生确认框确认；无 UI 时返回 `requires_user_action`。工具不提供密钥写入、OAuth 登录、Header 写入或用户草稿修改。
 
-**GitHub Copilot** 和 **OpenRouter** 是当前安装的 `pi-ai` Catalog 提供的 OAuth 实现，并不是插件根据你的 Base URL 推断出来的 Provider。某个 OAuth Provider 只有在其内置模型声明支持当前 API 类型时，才会显示在列表中。
+所有入口都有版本校验、明确错误和取消状态。配置通过文件锁与原子替换保存；运行时同步失败会如实返回“配置已保存、同步失败”，可调用 `runtime.sync` 重试。删除供应商默认保留凭据。
 
-OAuth 凭据支持外部 JSON 文件、直接粘贴 JSON，或使用 Pi 自己的 OAuth 登录并保存到：
-
-```text
-~/.pi/agent/auth.json
-```
-
-## 模型发现与编辑
-
-扩展支持：
-
-- 从配置的 API 自动发现模型；
-- 根据 Base URL 和模型 ID 补充候选模型；
-- 从 [models.dev](https://models.dev) 获取上下文、输出长度、价格、输入模态等元数据；
-- 按 `n` 手动添加模型；
-- 按 `/` 过滤模型；
-- 按 `a` 全选模型；
-- 编辑 reasoning、图片输入、上下文窗口、最大输出、价格、thinking levels 和 `compat` JSON；
-- 按 `p` 从当前安装的 `pi-ai` Catalog 选择完整模型预设。
-
-候选模型只有在选中后才会保存。已有 Provider 的模型编辑会自动保存。
-
-## 配置文件与安全
-
-Provider 配置保存在：
-
-```text
-~/.pi/agent/models.json
-```
-
-Pi OAuth 凭据保存在：
-
-```text
-~/.pi/agent/auth.json
-```
-
-这两个文件都包含敏感信息，请勿提交或分享。本扩展以 Pi 用户权限运行，模型发现时会访问你配置的服务端点和 `models.dev`。
-
-## 开发与发布
+## 开发与验证
 
 ```bash
-pnpm install
+pnpm typecheck
 pnpm test
-pnpm run typecheck
-pnpm run pack:check
+pnpm pack:check
 ```
 
-推送 `v*.*.*` 格式的 tag 后，GitHub Actions 会自动测试并发布 npm：
+测试使用临时目录、真实 Pi 0.82.0 子进程、本地 HTTP 服务和假 OAuth，不读取个人配置。终端测试需要 Python 3 和支持 PTY 的系统。
 
-```bash
-npm version patch
-git push origin main --follow-tags
-```
+- [实现及验证记录](docs/implementation.md)
+- [原始需求与设计](docs/refactor-requirements.md)
+- [Pi 0.82.0 接口核对及更正](docs/pi-0.82.0-interface-audit.md)
 
-## License
-
-[MIT](LICENSE)
+未修改 Pi 上游或 Pixle，尚未对接实际原生客户端；客户端可以按公开协议独立适配。

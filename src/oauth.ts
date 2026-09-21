@@ -1,188 +1,278 @@
-import type {
-  Api,
-  AuthCheck,
-  AuthInteraction,
-  KnownProvider,
-  Model,
-  OAuthAuth,
-  OAuthCredential,
-  Provider,
-  ProviderHeaders,
-} from "@earendil-works/pi-ai";
-import * as providerCatalog from "@earendil-works/pi-ai/providers/all";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import * as fsp from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import type { ModelConfig, ProviderConfig } from "./types";
-import { builtinOAuthProviderConfig, oauthProviderLabel } from "./pi-catalog";
+import * as os from "node:os";
+import { safeKeys } from "./domain/schema";
+import { withLockedFile } from "./domain/file-store";
+import {
+  createModels,
+  type AuthInteraction,
+  type Credential,
+  type CredentialStore,
+  type OAuthCredential,
+  type Provider,
+  type Api,
+  type KnownProvider,
+  type AuthResult,
+} from "@earendil-works/pi-ai";
+import * as catalog from "@earendil-works/pi-ai/providers/all";
+import { OperationError, checkAbort } from "./operations/errors";
+import type { ProviderConfig } from "./types";
+import type { Effects, OperationContext } from "./operations/types";
 
-export function looksLikeOAuthJsonText(input: string): boolean {
-  const trimmed = input.trim();
-  if (!trimmed.startsWith("{")) return false;
-  try {
-    const data: unknown = JSON.parse(trimmed);
-    return isRecord(data);
-  } catch {
-    return false;
+export class Authentication {
+  constructor(
+    readonly directory: string,
+    private providers: () => readonly Provider[] = catalog.builtinProviders,
+  ) {}
+  key(id: string, config: ProviderConfig) {
+    return config.credentialId || id;
   }
-}
-
-export function importPastedOAuthJson(providerId: string, oauthProvider: KnownProvider, input: string): void {
-  const data: unknown = JSON.parse(input);
-  if (!isRecord(data)) throw new Error("OAuth JSON must be an object.");
-  const id = providerId.trim();
-  if (!id) throw new Error("Provider ID is required.");
-  writeStoredOAuthCredential(id, credentialFromJson(data, { providerId: id, oauthProvider, fallbackToOAuthProvider: true }));
-}
-
-export function readOAuthCredential(
-  providerId: string,
-  oauthProvider: KnownProvider | undefined,
-  oauthJsonPath: string | undefined,
-): OAuthCredential | undefined {
-  if (!oauthProvider) return undefined;
-  const hasExplicitPath = !!oauthJsonPath?.trim();
-  try {
-    const data = JSON.parse(fs.readFileSync(resolveOAuthJsonPath(oauthJsonPath || defaultStoredOAuthJsonPath()), "utf-8"));
-    return credentialFromJson(data, { providerId, oauthProvider, fallbackToOAuthProvider: hasExplicitPath });
-  } catch (error) {
-    if (hasExplicitPath) throw error;
-    return undefined;
+  mode(config: ProviderConfig) {
+    return (
+      config.authMode ||
+      (config.oauthProvider
+        ? "oauth"
+        : config.apiKey || (config.credentialId && this.raw()[config.credentialId])
+          ? "api_key"
+          : "none")
+    );
   }
-}
-
-export async function resolveOAuthCredential(
-  providerId: string,
-  config: ProviderConfig,
-  oauthProvider: KnownProvider,
-  oauthJsonPath: string | undefined,
-  signal?: AbortSignal,
-): Promise<OAuthCredential | undefined> {
-  const credential = readOAuthCredential(providerId, oauthProvider, oauthJsonPath);
-  if (!credential || !credential.refresh || Date.now() < credential.expires) return credential;
-  const oauth = builtinOAuthProvider(providerId, config, oauthProvider).auth.oauth;
-  if (!oauth) throw new Error(`${oauthProviderLabel(oauthProvider)} OAuth is not available in this Pi version.`);
-  if (oauthJsonPath?.trim()) return refreshOAuthCredentialFile(providerId, oauthProvider, oauthJsonPath, oauth, credential, signal);
-  const refreshed = await oauth.refresh(credential, signal);
-  writeStoredOAuthCredential(providerId, refreshed);
-  return refreshed;
-}
-
-export function hasStoredOAuthCredential(providerId: string): boolean {
-  try {
-    const data = JSON.parse(fs.readFileSync(defaultStoredOAuthJsonPath(), "utf-8"));
-    return isRecord(data) && isRecord(data[providerId]) && data[providerId].type === "oauth";
-  } catch {
-    return false;
+  private raw(): Record<string, Credential> {
+    try {
+      return parseAuthStore(fs.readFileSync(path.join(this.directory, "auth.json"), "utf8"));
+    } catch (error: any) {
+      if (error.code === "ENOENT") return {};
+      throw new OperationError("AUTH_FAILED", "认证存储不可读取。");
+    }
   }
-}
-
-export async function loginStoredOAuthProvider(
-  providerId: string,
-  config: ProviderConfig,
-  oauthProvider: KnownProvider,
-  interaction: AuthInteraction,
-): Promise<void> {
-  const oauth = builtinOAuthProvider(providerId, config, oauthProvider).auth.oauth;
-  if (!oauth) throw new Error(`${oauthProviderLabel(oauthProvider)} OAuth is not available in this Pi version.`);
-  const credential = await oauth.login(interaction);
-  writeStoredOAuthCredential(providerId, credential);
-}
-
-export function createOAuthBackedProvider(id: string, config: ProviderConfig, oauthProvider: KnownProvider): Provider<Api> {
-  const base = builtinOAuthProvider(id, config, oauthProvider);
-  const oauth = base.auth.oauth;
-  if (!oauth) throw new Error(`${oauthProviderLabel(oauthProvider)} OAuth is not available in this Pi version.`);
-  const oauthJsonPath = config.oauthJsonPath?.trim();
-  const apiKey = oauthJsonPath ? oauthJsonFileAuth(id, oauthProvider, oauth, oauthJsonPath) : undefined;
-  return {
-    id,
-    name: config.name || base.name || id,
-    baseUrl: config.baseUrl || base.baseUrl,
-    headers: mergeHeaders(base.headers, config.headers),
-    auth: apiKey && oauthJsonPath ? { apiKey } : { oauth },
-    getModels: () => config.models.map((model) => toModel(id, config, model)),
-    stream: (model, context, options) => base.stream(model, context, options),
-    streamSimple: (model, context, options) => base.streamSimple(model, context, options),
-  };
-}
-
-function mergeHeaders(
-  baseHeaders: ProviderHeaders | undefined,
-  configHeaders: Record<string, string> | undefined,
-): ProviderHeaders | undefined {
-  if (!baseHeaders && !configHeaders) return undefined;
-  return { ...(baseHeaders || {}), ...(configHeaders || {}) };
-}
-
-function builtinOAuthProvider(id: string, config: ProviderConfig, oauthProvider: KnownProvider): Provider<Api> {
-  if (oauthProvider === "radius") return providerCatalog.radiusProvider({ id, name: config.name || id, gateway: config.baseUrl });
-  const provider = providerCatalog.builtinProviders().find((item) => item.id === oauthProvider);
-  if (!provider) throw new Error(`Unsupported OAuth provider: ${oauthProvider}`);
-  return provider as Provider<Api>;
-}
-
-function oauthJsonFileAuth(
-  providerId: string,
-  oauthProvider: KnownProvider,
-  oauth: OAuthAuth,
-  oauthJsonPath: string,
-): NonNullable<Provider<Api>["auth"]["apiKey"]> {
-  return {
-    name: `${oauthProviderLabel(oauthProvider)} OAuth JSON`,
-    check: async (): Promise<AuthCheck | undefined> => {
-      const credential = await readOAuthCredentialFile(providerId, oauthProvider, oauthJsonPath).catch(() => undefined);
-      return credential ? { type: "oauth", source: "OAuth JSON" } : undefined;
-    },
-    resolve: async () => {
-      const credential = await readOAuthCredentialFile(providerId, oauthProvider, oauthJsonPath);
-      const current =
-        credential.refresh && Date.now() >= credential.expires
-          ? await refreshOAuthCredentialFile(providerId, oauthProvider, oauthJsonPath, oauth, credential)
-          : credential;
+  status(id: string, config: ProviderConfig) {
+    const mode = this.mode(config);
+    const stored = this.raw()[this.key(id, config)];
+    return {
+      mode,
+      methodId: config.oauthProvider,
+      status:
+        mode === "none"
+          ? "configured"
+          : config.oauthJsonPath
+            ? "unknown"
+            : stored || config.apiKey
+              ? stored?.type === "oauth" && stored.expires < Date.now()
+                ? "expired"
+                : "configured"
+              : "missing",
+      hasCredential: !!(stored || config.apiKey || config.oauthJsonPath),
+    };
+  }
+  private store(id: string, config: ProviderConfig, signal?: AbortSignal, onWrite?: () => void): CredentialStore {
+    const authPath = path.join(this.directory, "auth.json");
+    if (!config.oauthJsonPath)
       return {
-        auth: await oauth.toAuth(current),
-        env: isStringRecord(current.env) ? current.env : undefined,
-        source: "OAuth JSON",
+        read: async (key) => this.raw()[key],
+        list: async () =>
+          Object.entries(this.raw()).map(([providerId, credential]) => ({ providerId, type: credential.type })),
+        modify: (key, fn) =>
+          withLockedFile(
+            authPath,
+            signal,
+            async (raw) => {
+              const data = parseAuthStore(raw);
+              const next = await fn(data[key]);
+              if (!next) return { result: data[key] };
+              data[key] = next;
+              return { result: next, next: JSON.stringify(data, null, 2) + "\n" };
+            },
+            onWrite,
+          ),
+        delete: (key) =>
+          withLockedFile(
+            authPath,
+            signal,
+            async (raw) => {
+              const data = parseAuthStore(raw);
+              delete data[key];
+              return { result: undefined, next: JSON.stringify(data, null, 2) + "\n" };
+            },
+            onWrite,
+          ),
       };
-    },
-  };
+    const file = path.resolve(config.oauthJsonPath.replace(/^~(?=$|\/)/, os.homedir()));
+    const read = () => {
+      try {
+        return credentialFromJson(JSON.parse(fs.readFileSync(file, "utf8")), {
+          providerId: id,
+          oauthProvider: config.oauthProvider!,
+        });
+      } catch {
+        throw new OperationError("AUTH_FAILED", "无法读取所选 OAuth JSON 文件。");
+      }
+    };
+    return {
+      read: async () => read(),
+      list: async () => [{ providerId: this.key(id, config), type: "oauth" }],
+      modify: async (_key, fn) => {
+        if (!fs.existsSync(file)) throw new OperationError("AUTH_FAILED", "所选 OAuth JSON 文件不存在。");
+        try {
+          return await withLockedFile(
+            file,
+            signal,
+            async (raw) => {
+              if (raw === undefined) throw new OperationError("AUTH_FAILED", "所选认证文件不存在。");
+              const json = JSON.parse(raw);
+              const current = credentialFromJson(json, { providerId: id, oauthProvider: config.oauthProvider! });
+              const next = await fn(current);
+              if (!next) return { result: current };
+              return {
+                result: next,
+                next:
+                  JSON.stringify(
+                    replaceCredentialInJson(json, next as OAuthCredential, {
+                      providerId: id,
+                      oauthProvider: config.oauthProvider!,
+                    }),
+                    null,
+                    2,
+                  ) + "\n",
+              };
+            },
+            onWrite,
+          );
+        } catch (error) {
+          checkAbort(signal);
+          if (error instanceof OperationError) throw error;
+          throw new OperationError("AUTH_FAILED", "无法刷新或写入所选 OAuth JSON 文件。");
+        }
+      },
+      delete: async () => {
+        throw new OperationError("UNSUPPORTED_CAPABILITY", "外部认证文件不会被删除，请移除文件引用。");
+      },
+    };
+  }
+  oauthProvider(config: ProviderConfig): Provider<Api> {
+    const provider =
+      config.oauthProvider === "radius"
+        ? catalog.radiusProvider({ gateway: config.baseUrl })
+        : this.providers().find((p) => p.id === config.oauthProvider);
+    if (!provider?.auth.oauth) throw new OperationError("UNSUPPORTED_CAPABILITY", "此 OAuth 方式不可用。");
+    return provider as Provider<Api>;
+  }
+  async resolve(id: string, config: ProviderConfig, signal?: AbortSignal, effects?: Effects): Promise<AuthResult> {
+    checkAbort(signal);
+    if (this.mode(config) === "none") return { auth: { apiKey: "unused", headers: { Authorization: null } } };
+    if (this.mode(config) === "api_key") {
+      const credential = this.raw()[this.key(id, config)];
+      let key = credential?.type === "api_key" ? credential.key : config.apiKey;
+      if (!key) throw new OperationError("AUTH_REQUIRED", "请先由用户配置 API Key。");
+      // Existing command-based credentials are deliberately not executed by management operations.
+      if (key.startsWith("!"))
+        throw new OperationError("UNSUPPORTED_CAPABILITY", "请使用已存 API Key 或环境变量引用，不执行凭据命令。");
+      if (/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(key)) key = process.env[key.replace(/^\$\{?|\}$/g, "")];
+      if (!key) throw new OperationError("AUTH_REQUIRED", "认证环境变量尚未设置。");
+      return { auth: { apiKey: key, ...(config.authHeader === false ? { headers: { Authorization: null } } : {}) } };
+    }
+    const provider = this.oauthProvider(config);
+    const oauth = provider.auth.oauth!;
+    const key = this.key(id, config);
+    const credentials = this.store(id, config, signal, () => {
+      if (effects) effects.credentials = "updated";
+    });
+    const models = createModels({ credentials });
+    models.setProvider({
+      ...provider,
+      id: key,
+      auth: {
+        oauth: {
+          ...oauth,
+          refresh: (c, s) => oauth.refresh(c, signal && s ? AbortSignal.any([signal, s]) : signal || s),
+        },
+      },
+    });
+    try {
+      const result = await models.getAuth(key);
+      checkAbort(signal);
+      if (!result) throw new OperationError("AUTH_REQUIRED", "请先由用户完成 OAuth 登录。");
+      return result;
+    } catch (error) {
+      checkAbort(signal);
+      if (error instanceof OperationError) throw error;
+      throw new OperationError("AUTH_FAILED", "OAuth 认证或刷新失败。", undefined, true);
+    }
+  }
+  async saveCredential(
+    id: string,
+    config: ProviderConfig,
+    credential: Credential | undefined,
+    context: OperationContext,
+  ) {
+    checkAbort(context.signal);
+    const store = this.store(id, { ...config, oauthJsonPath: undefined }, context.signal, () => {
+      context.effects.credentials = "updated";
+    });
+    if (credential) await store.modify(this.key(id, config), async () => credential);
+    else await store.delete(this.key(id, config));
+  }
+  importedCredential(id: string, config: ProviderConfig, value: string): OAuthCredential {
+    if (this.mode(config) !== "oauth") throw new OperationError("VALIDATION_ERROR", "当前认证方式不是 OAuth。");
+    try {
+      return credentialFromJson(JSON.parse(value), { providerId: id, oauthProvider: config.oauthProvider! });
+    } catch {
+      throw new OperationError("VALIDATION_ERROR", "OAuth JSON 不包含有效认证数据。");
+    }
+  }
+  async login(config: ProviderConfig, context: OperationContext): Promise<OAuthCredential> {
+    if (context.caller !== "user_client") throw new OperationError("USER_ACTION_REQUIRED", "请由用户完成认证。");
+    const interaction: AuthInteraction = {
+      signal: context.signal,
+      prompt: (p) =>
+        context.prompt(
+          {
+            kind: p.type,
+            message: p.message,
+            ...(p.type === "select"
+              ? { options: [...p.options] }
+              : { placeholder: p.placeholder, secret: p.type === "secret" || p.type === "manual_code" }),
+          },
+          p.signal,
+        ),
+      notify: (e) => {
+        if (e.type === "auth_url")
+          context.notify({ kind: "open_url", message: e.instructions || "在浏览器中完成登录。", url: e.url });
+        else if (e.type === "device_code")
+          context.notify({
+            kind: "device_code",
+            message: "使用设备码完成登录。",
+            userCode: e.userCode,
+            verificationUri: e.verificationUri,
+          });
+        else context.progress("authenticating");
+      },
+    };
+    try {
+      const credential = await this.oauthProvider(config).auth.oauth!.login(interaction);
+      checkAbort(context.signal);
+      return credential;
+    } catch (error) {
+      checkAbort(context.signal);
+      if (error instanceof OperationError) throw error;
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      throw new OperationError("AUTH_FAILED", "OAuth 登录未完成。", undefined, true);
+    }
+  }
+  newBinding() {
+    return `provider-auth-${randomUUID()}`;
+  }
 }
-
-async function readOAuthCredentialFile(
-  providerId: string,
-  oauthProvider: KnownProvider,
-  oauthJsonPath: string,
-): Promise<OAuthCredential> {
-  const data = JSON.parse(await fsp.readFile(resolveOAuthJsonPath(oauthJsonPath), "utf-8"));
-  return credentialFromJson(data, { providerId, oauthProvider });
-}
-
-async function refreshOAuthCredentialFile(
-  providerId: string,
-  oauthProvider: KnownProvider,
-  oauthJsonPath: string,
-  oauth: OAuthAuth,
-  credential: OAuthCredential,
-  signal?: AbortSignal,
-): Promise<OAuthCredential> {
-  const filePath = resolveOAuthJsonPath(oauthJsonPath);
-  const data = JSON.parse(await fsp.readFile(filePath, "utf-8"));
-  const refreshed = await oauth.refresh(credential, signal);
-  await fsp.writeFile(filePath, JSON.stringify(replaceCredentialInJson(data, refreshed, { providerId, oauthProvider }), null, 2) + "\n", {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  return refreshed;
-}
-
-function credentialFromJson(
+export function credentialFromJson(
   value: unknown,
   options: { providerId: string; oauthProvider: KnownProvider; fallbackToOAuthProvider?: boolean },
 ): OAuthCredential {
-  const picked = pickCredentialObject(value, options);
-  const access = stringValue(picked.access) || stringValue(picked.access_token) || stringValue(picked.token) || stringValue(picked.key);
+  const { credential: picked } = locateCredential(value, options);
+  const access =
+    stringValue(picked.access) ||
+    stringValue(picked.access_token) ||
+    stringValue(picked.token) ||
+    stringValue(picked.key);
   if (!access) throw new Error("OAuth JSON is missing access/access_token.");
   const refresh = stringValue(picked.refresh) || stringValue(picked.refresh_token) || "";
   return {
@@ -194,21 +284,21 @@ function credentialFromJson(
   };
 }
 
-function pickCredentialObject(
+function locateCredential(
   value: unknown,
   options: { providerId: string; oauthProvider: KnownProvider; fallbackToOAuthProvider?: boolean },
-): Record<string, unknown> {
+) {
   if (!isRecord(value)) throw new Error("OAuth JSON must be an object.");
-  if (looksLikeCredential(value)) return value;
-  const tokens = value.tokens;
-  if (isRecord(tokens) && looksLikeCredential(tokens)) return tokens;
-  const providerCredential = value[options.providerId];
-  if (isRecord(providerCredential) && looksLikeCredential(providerCredential)) return providerCredential;
-  if (options.fallbackToOAuthProvider !== false) {
-    const oauthCredential = value[options.oauthProvider];
-    if (isRecord(oauthCredential) && looksLikeCredential(oauthCredential)) return oauthCredential;
+  if (looksLikeCredential(value)) return { root: value, credential: value, key: undefined };
+  for (const key of [
+    "tokens",
+    options.providerId,
+    ...(options.fallbackToOAuthProvider === false ? [] : [options.oauthProvider]),
+  ]) {
+    const candidate = value[key];
+    if (isRecord(candidate) && looksLikeCredential(candidate)) return { root: value, credential: candidate, key };
   }
-  throw new Error(`OAuth JSON has no credential for "${options.providerId}".`);
+  throw new Error("OAuth JSON does not contain a credential.");
 }
 
 function replaceCredentialInJson(
@@ -216,29 +306,25 @@ function replaceCredentialInJson(
   credential: OAuthCredential,
   options: { providerId: string; oauthProvider: KnownProvider },
 ): unknown {
-  if (!isRecord(value) || looksLikeCredential(value)) return credential;
-  const providerCredential = value[options.providerId];
-  if (isRecord(providerCredential) && looksLikeCredential(providerCredential)) {
-    return { ...value, [options.providerId]: credential };
+  const located = locateCredential(value, options);
+  const next: Record<string, unknown> = { ...located.credential, ...credential };
+  // Update aliases used by the external owner too, instead of leaving a stale token next to a new one.
+  for (const key of ["access_token", "token", "key"]) if (key in located.credential) next[key] = credential.access;
+  if ("refresh_token" in located.credential) next.refresh_token = credential.refresh;
+  for (const key of ["expires_at", "expiry_date"]) {
+    const original = located.credential[key];
+    if (original === undefined) continue;
+    const numeric = numberValue(original);
+    next[key] =
+      numeric === undefined
+        ? new Date(credential.expires).toISOString()
+        : numeric < 10_000_000_000
+          ? Math.floor(credential.expires / 1000)
+          : credential.expires;
   }
-  const oauthCredential = value[options.oauthProvider];
-  if (isRecord(oauthCredential) && looksLikeCredential(oauthCredential)) {
-    return { ...value, [options.oauthProvider]: credential };
-  }
-  const tokens = value.tokens;
-  if (isRecord(tokens) && looksLikeCredential(tokens)) {
-    return {
-      ...value,
-      tokens: {
-        ...tokens,
-        access_token: credential.access,
-        refresh_token: credential.refresh,
-        expires_at: credential.expires,
-      },
-      last_refresh: new Date().toISOString(),
-    };
-  }
-  return value;
+  if ("expires_in" in located.credential)
+    next.expires_in = Math.max(0, Math.floor((credential.expires - Date.now()) / 1000));
+  return located.key === undefined ? next : { ...located.root, [located.key]: next };
 }
 
 function looksLikeCredential(value: Record<string, unknown>): boolean {
@@ -264,68 +350,6 @@ function expiresValue(value: Record<string, unknown>): number {
   return expiresIn === undefined ? Number.MAX_SAFE_INTEGER : Date.now() + expiresIn * 1000;
 }
 
-function toModel(providerId: string, provider: ProviderConfig, model: ModelConfig): Model<Api> {
-  return {
-    id: model.id,
-    name: model.name || model.id,
-    api: (model.api || provider.api) as Api,
-    provider: providerId,
-    baseUrl: model.baseUrl || provider.baseUrl,
-    reasoning: model.reasoning || false,
-    thinkingLevelMap: model.thinkingLevelMap,
-    input: normalizeInput(model.input),
-    cost: model.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: model.contextWindow || 128000,
-    maxTokens: model.maxTokens || 16384,
-    headers: model.headers,
-    compat: model.compat,
-  };
-}
-
-function normalizeInput(input: string[] | undefined): ("text" | "image")[] {
-  const normalized = (input || ["text"]).filter((value): value is "text" | "image" => value === "text" || value === "image");
-  return normalized.length ? normalized : ["text"];
-}
-
-function resolvePath(input: string): string {
-  const expanded = input
-    .replace(/^~(?=$|\/)/, os.homedir())
-    .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_match, braced, bare) => {
-      return process.env[String(braced || bare)] || "";
-    });
-  return path.resolve(expanded);
-}
-
-function resolveOAuthJsonPath(input: string): string {
-  const filePath = resolvePath(input);
-  if (fs.existsSync(filePath)) return filePath;
-  if (path.basename(filePath) === "oauth.json") {
-    const authPath = path.join(path.dirname(filePath), "auth.json");
-    if (fs.existsSync(authPath)) return authPath;
-  }
-  const migratedPath = `${filePath}.migrated`;
-  if (fs.existsSync(migratedPath)) return migratedPath;
-  return filePath;
-}
-
-function defaultStoredOAuthJsonPath(): string {
-  const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
-  return path.join(agentDir, "auth.json");
-}
-
-function writeStoredOAuthCredential(providerId: string, credential: OAuthCredential): void {
-  const filePath = defaultStoredOAuthJsonPath();
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  let data: Record<string, unknown> = {};
-  try {
-    const parsed: unknown = JSON.parse(fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "{}");
-    if (isRecord(parsed)) data = parsed;
-  } catch {}
-  data[providerId] = { ...credential, type: "oauth" };
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
-}
-
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -341,10 +365,17 @@ function dateValue(value: unknown): number | undefined {
   return Number.isNaN(n) ? undefined : n;
 }
 
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return isRecord(value) && Object.values(value).every((item) => typeof item === "string");
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseAuthStore(raw: string | undefined): Record<string, Credential> {
+  try {
+    const value = JSON.parse(raw ?? "{}");
+    if (!isRecord(value)) throw new Error();
+    safeKeys(value);
+    return value as Record<string, Credential>;
+  } catch {
+    throw new OperationError("AUTH_FAILED", "认证存储不是有效对象，未修改文件。");
+  }
 }

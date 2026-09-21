@@ -2,53 +2,22 @@ import type { Api, KnownApi, KnownProvider, Provider } from "@earendil-works/pi-
 import * as providerCatalog from "@earendil-works/pi-ai/providers/all";
 
 const RADIUS_API = "pi-messages" as KnownApi;
-const DEFAULT_RADIUS_GATEWAY = "https://radius.pi.dev";
 
 export const API_CHOICES: KnownApi[] = loadApiChoices();
-export const OAUTH_PROVIDER_CHOICES: Array<KnownProvider | "none"> = ["none", ...loadOAuthProviderChoices()];
+export const OAUTH_PROVIDER_CHOICES: KnownProvider[] = loadOAuthProviderChoices();
 
 export function apiLabel(api: KnownApi): string {
   return humanizeId(api);
 }
 
-export function apiChoiceIndex(api: KnownApi): number {
-  const index = API_CHOICES.indexOf(api);
-  return index >= 0 ? index : 0;
-}
-
-export function apiChoiceAt(index: number): KnownApi {
-  return API_CHOICES[Math.max(0, Math.min(API_CHOICES.length - 1, index))] || API_CHOICES[0];
-}
-
-export function defaultApiChoice(): KnownApi {
-  return (API_CHOICES.includes("openai-completions") ? "openai-completions" : API_CHOICES[0]) as KnownApi;
-}
-
-export function oauthProviderLabel(provider: KnownProvider | "none" | undefined): string {
-  if (!provider || provider === "none") return "API Key";
+export function oauthProviderLabel(provider: KnownProvider): string {
   const builtin = builtinOAuthProviderConfig(provider);
   return builtin?.name || provider;
 }
 
-export function normalizeOAuthProvider(value: unknown): KnownProvider | undefined {
-  if (typeof value !== "string") return undefined;
-  if (value === "none") return undefined;
-  return OAUTH_PROVIDER_CHOICES.includes(value as KnownProvider | "none") ? (value as KnownProvider) : undefined;
-}
-
-export function normalizeOAuthProviderForApi(value: unknown, api: KnownApi): KnownProvider | undefined {
-  const provider = normalizeOAuthProvider(value);
-  return provider && oauthProviderSupportsApi(provider, api) ? provider : undefined;
-}
-
-export function defaultOAuthProviderForApi(api: KnownApi): KnownProvider | undefined {
+export function oauthProviderChoicesForApi(api: KnownApi): KnownProvider[] {
   const providers = loadOAuthProviderChoices().filter((provider) => oauthProviderSupportsApi(provider, api));
-  return providers.length === 1 ? providers[0] : undefined;
-}
-
-export function oauthProviderChoicesForApi(api: KnownApi): Array<KnownProvider | "none"> {
-  const providers = loadOAuthProviderChoices().filter((provider) => oauthProviderSupportsApi(provider, api));
-  return apiSupportsApiKey(api) ? ["none", ...providers] : providers;
+  return providers;
 }
 
 export function apiSupportsApiKey(api: KnownApi): boolean {
@@ -63,19 +32,6 @@ export function oauthProviderSupportsApi(provider: KnownProvider, api: KnownApi)
       ?.getModels()
       .some((model) => model.api === api) || dynamicOAuthProviderApi(provider) === api
   );
-}
-
-export function defaultApiForOAuth(provider: KnownProvider | undefined): KnownApi | undefined {
-  if (!provider) return undefined;
-  const model = builtinOAuthProviderConfig(provider)
-    ?.getModels()
-    .find((item) => typeof item.api === "string");
-  return (model?.api as KnownApi | undefined) || dynamicOAuthProviderApi(provider);
-}
-
-export function defaultBaseUrlForOAuth(provider: KnownProvider | undefined): string | undefined {
-  if (!provider) return undefined;
-  return builtinOAuthProviderConfig(provider)?.baseUrl || dynamicOAuthProviderBaseUrl(provider);
 }
 
 export function builtinOAuthProviderConfig(oauthProvider: KnownProvider): Provider<Api> | undefined {
@@ -103,10 +59,6 @@ function loadApiChoices(): KnownApi[] {
 
 function dynamicOAuthProviderApi(provider: KnownProvider): KnownApi | undefined {
   return provider === "radius" ? RADIUS_API : undefined;
-}
-
-function dynamicOAuthProviderBaseUrl(provider: KnownProvider): string | undefined {
-  return provider === "radius" ? DEFAULT_RADIUS_GATEWAY : undefined;
 }
 
 function humanizeId(id: string): string {

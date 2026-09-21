@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { OperationError, checkAbort } from "./operations/errors";
 // Model discovery — native API calls + models.dev catalog fallback
 import type { DiscoveredModel, ProviderConfig } from "./types";
 import { usesAuthHeader } from "./types";
@@ -107,11 +109,6 @@ interface ModelsDevModel {
   };
 }
 
-interface HealthEndpoint {
-  url: string;
-  headers: Record<string, string>;
-}
-
 interface RecommendationModel extends DiscoveredModel {
   reasoning: boolean;
   input: Model<Api>["input"];
@@ -170,11 +167,15 @@ export async function discoverModels(
     loadCatalog(),
   ]);
   const models = recommendModels(nativeResult.models, providerId, provider, catalog);
+  checkAbort(discoveryContext.getStore()?.signal);
+  if ("error" in nativeResult)
+    discoveryContext.getStore()?.warnings.push({
+      code: nativeResult.error instanceof OperationError ? nativeResult.error.code : "NETWORK_ERROR",
+      message: "服务端模型列表获取失败，候选可能仅来自模型目录。",
+    });
   if (models.length > 0) return models;
-  const nativeError = "error" in nativeResult ? ` Native discovery failed: ${serr(nativeResult.error)}` : "";
-  throw new Error(
-    `No models discovered for "${providerId}". Check the URL, API key, and network connectivity.${nativeError}`,
-  );
+  if ("error" in nativeResult) throw nativeResult.error;
+  return [];
 }
 
 export async function discoverCodexOAuthModels(
@@ -183,8 +184,13 @@ export async function discoverCodexOAuthModels(
   accessToken: string,
   accountId?: string,
 ): Promise<DiscoveredModel[]> {
-  const [native, catalog] = await Promise.all([discoverCodexModels(provider.baseUrl, accessToken, accountId), loadCatalog()]);
-  const models = recommendModels(native, providerId, provider, catalog).filter((model) => model.suggestedBy !== "base-url");
+  const [native, catalog] = await Promise.all([
+    discoverCodexModels(provider.baseUrl, accessToken, accountId),
+    loadCatalog(),
+  ]);
+  const models = recommendModels(native, providerId, provider, catalog).filter(
+    (model) => model.suggestedBy !== "base-url",
+  );
   if (models.length > 0) return models;
   throw new Error(`No models returned by "${providerId}" Codex API.`);
 }
@@ -216,6 +222,9 @@ async function discoverNative(
   if (api === "anthropic-messages") return discoverAnthropic(bp, key);
   if (api === "google-generative-ai") return discoverGemini(bp, key);
   if (api === "google-vertex") return discoverVertex(bp, key);
+  discoveryContext
+    .getStore()
+    ?.warnings.push({ code: "DISCOVERY_UNSUPPORTED", message: "当前 API 没有已实现的模型发现接口，可手动添加模型。" });
   return [];
 }
 
@@ -226,7 +235,11 @@ async function discoverOpenAI(baseUrl: string, apiKey: string): Promise<Discover
   return (r?.data || []).filter((m) => m.id?.trim()).map((m) => ({ id: m.id.trim(), name: m.id.trim() }));
 }
 
-async function discoverCodexModels(baseUrl: string, accessToken: string, accountId?: string): Promise<DiscoveredModel[]> {
+async function discoverCodexModels(
+  baseUrl: string,
+  accessToken: string,
+  accountId?: string,
+): Promise<DiscoveredModel[]> {
   const endpoint = codexModelsEndpoint(baseUrl);
   const headers: Record<string, string> = {
     ...bearer(accessToken),
@@ -331,33 +344,35 @@ async function discoverOllama(baseUrl: string): Promise<DiscoveredModel[]> {
 
 async function discoverVertex(baseUrl: string, apiKey: string): Promise<DiscoveredModel[]> {
   if (!apiKey) return [];
-  try {
-    const ep = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
-    const r = await get<VertexModelsResp>(`${ep}/publishers/google/models?pageSize=1000`, {
-      Authorization: `Bearer ${apiKey}`,
-    });
-    return (r?.models || [])
-      .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
-      .map((m) => ({
-        id: m.name.replace(/^publishers\/google\/models\//, ""),
-        name: m.displayName || m.name,
-        reasoning: !!m.thinking,
-        input: inputFilter(["text", "image"]),
-        contextWindow: m.inputTokenLimit || 128000,
-        maxTokens: m.outputTokenLimit || 8192,
-      }))
-      .filter((m) => m.id);
-  } catch {
-    return [];
-  }
+  const ep = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+  const r = await get<VertexModelsResp>(`${ep}/publishers/google/models?pageSize=1000`, {
+    Authorization: `Bearer ${apiKey}`,
+  });
+  return (r?.models || [])
+    .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+    .map((m) => ({
+      id: m.name.replace(/^publishers\/google\/models\//, ""),
+      name: m.displayName || m.name,
+      reasoning: !!m.thinking,
+      input: inputFilter(["text", "image"]),
+      contextWindow: m.inputTokenLimit || 128000,
+      maxTokens: m.outputTokenLimit || 8192,
+    }))
+    .filter((m) => m.id);
 }
 
 // ─── Recommendations: model id first, then base URL ─────────────
 
 async function loadCatalog(): Promise<Record<string, ModelsDevProvider>> {
   try {
-    return (await get<Record<string, ModelsDevProvider>>(CATALOG_URL)) || {};
+    const options = discoveryContext.getStore();
+    if (options?.catalogUrl === null) return {};
+    return (await get<Record<string, ModelsDevProvider>>(options?.catalogUrl || CATALOG_URL)) || {};
   } catch {
+    checkAbort(discoveryContext.getStore()?.signal);
+    discoveryContext
+      .getStore()
+      ?.warnings.push({ code: "CATALOG_UNAVAILABLE", message: "远端模型目录暂不可用；使用服务端结果和 Pi 本地目录。" });
     return {};
   }
 }
@@ -442,7 +457,7 @@ export function recommendModels(
   });
 
   // Base URL is a secondary recommendation source. These models are not
-  // enabled automatically; the wizard presents them in the same pick list.
+  // enabled automatically; the native UI presents them in the same pick list.
   const seen = new Set(result.map((model) => normalizedModelId(model.id)));
   const urlMatches = index.providers
     .map((entry) => ({ entry, score: recommendationProviderScore(provider.baseUrl, entry) }))
@@ -597,109 +612,8 @@ function appendCandidate(models: DiscoveredModel[], candidate: DiscoveredModel, 
   }
 }
 
-// ─── Health check ────────────────────────────────────────────────
-
-export async function checkProviderHealth(
-  providerId: string,
-  provider: ProviderConfig,
-  apiKey?: string,
-): Promise<{ reachable: boolean; latencyMs: number; error?: string }> {
-  const start = Date.now(),
-    key = apiKey || "";
-  try {
-    const { url, headers } = healthEndpoint(providerId, provider, key);
-    const r = await fetchTimeout(url, { headers }, 10_000);
-    const ms = Date.now() - start;
-    return { reachable: r.ok, latencyMs: ms, error: r.ok ? undefined : `HTTP ${r.status}` };
-  } catch (err) {
-    return { reachable: false, latencyMs: Date.now() - start, error: serr(err) };
-  }
-}
-
-// Lookup map replaces if-else chain
-function healthEndpoint(providerId: string, { baseUrl, api }: ProviderConfig, key: string): HealthEndpoint {
-  const bp = baseUrl.replace(/\/$/, "");
-  const v1 = (b: string) => (b.endsWith("/v1") ? b : `${b}/v1`);
-  const vb = (b: string) => (b.endsWith("/v1beta") ? b : `${b}/v1beta`);
-
-  if (isOllama(providerId, baseUrl)) return { url: `${bp.replace(/\/v1\/?$/, "")}/api/tags`, headers: {} };
-
-  const routes: Record<string, () => HealthEndpoint> = {
-    "anthropic-messages": () => ({
-      url: `${v1(bp)}/models?limit=1`,
-      headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
-    }),
-    "google-generative-ai": () => ({ url: `${vb(bp)}/models?pageSize=1`, headers: { "x-goog-api-key": key } }),
-    "google-vertex": () => ({
-      url: `${v1(bp)}/publishers/google/models?pageSize=1`,
-      headers: bearer(key),
-    }),
-    "azure-openai-responses": () => ({ url: `${bp}/models?api-version=2024-10-21`, headers: { "api-key": key } }),
-  };
-
-  if (routes[api]) return routes[api]();
-  return { url: `${bp}/models`, headers: bearer(key) };
-}
-
-// ─── Chat test ───────────────────────────────────────────────────
-
-export async function testChatCompletion(
-  provider: ProviderConfig,
-  modelId: string,
-  apiKey: string,
-): Promise<{ success: boolean; response?: string; latencyMs: number; error?: string }> {
-  const bp = provider.baseUrl.replace(/\/$/, ""),
-    start = Date.now();
-  try {
-    if (provider.api === "anthropic-messages") return chatAnthropic(bp, modelId, apiKey, start);
-    if (provider.api === "google-generative-ai") return chatGoogle(bp, modelId, apiKey, start);
-    return chatOpenAI(bp, modelId, apiKey, start);
-  } catch (err) {
-    return { success: false, latencyMs: Date.now() - start, error: serr(err) };
-  }
-}
-
-async function chatOpenAI(baseUrl: string, modelId: string, apiKey: string, start: number) {
-  const r = await post(
-    `${baseUrl}/chat/completions`,
-    { model: modelId, max_tokens: 256, messages: [{ role: "user", content: "Say hello in one sentence." }] },
-    bearer(apiKey),
-  );
-  return chatResult(r, start, (d: any) => d.choices?.[0]?.message?.content);
-}
-async function chatAnthropic(baseUrl: string, modelId: string, apiKey: string, start: number) {
-  const ep = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
-  const r = await post(
-    `${ep}/messages`,
-    { model: modelId, max_tokens: 256, messages: [{ role: "user", content: "Say hello in one sentence." }] },
-    { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-  );
-  return chatResult(r, start, (d: any) => d.content?.map((c: any) => c.text || "").join(""));
-}
-async function chatGoogle(baseUrl: string, modelId: string, apiKey: string, start: number) {
-  const ep = baseUrl.endsWith("/v1beta") ? baseUrl : `${baseUrl}/v1beta`;
-  const qs = apiKey ? `?key=${encodeURIComponent(apiKey)}` : "";
-  const r = await post(`${ep}/models/${modelId}:generateContent${qs}`, {
-    contents: [{ parts: [{ text: "Say hello in one sentence." }] }],
-  });
-  return chatResult(r, start, (d: any) => d.candidates?.[0]?.content?.parts?.map((p: any) => p.text || "").join(""));
-}
-async function chatResult<T>(resp: Response, start: number, extract: (d: T) => string | undefined) {
-  const ms = Date.now() - start;
-  if (!resp.ok) {
-    const e = await resp.text().catch(() => "");
-    return { success: false, latencyMs: ms, error: `HTTP ${resp.status}: ${e.slice(0, 200)}` };
-  }
-  return { success: true, response: extract((await resp.json()) as T) || "(empty)", latencyMs: ms };
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────
-
 function bearer(key: string): Record<string, string> {
   return key ? { Authorization: `Bearer ${key}` } : {};
-}
-function serr(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 function isOllama(name: string, baseUrl: string): boolean {
@@ -785,26 +699,69 @@ export function toModelCost(c?: ModelsDevModel["cost"]): ModelCost | undefined {
 
 async function get<T>(url: string, headers?: Record<string, string>): Promise<T | undefined> {
   const r = await fetchTimeout(url, headers ? { headers } : undefined);
-  return r.ok ? (r.json() as T) : undefined;
-}
-
-async function post(url: string, body: unknown, extraHeaders?: Record<string, string>): Promise<Response> {
-  return fetchTimeout(url, {
-    method: "POST",
-    headers: { ...extraHeaders, "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  if (!r.ok)
+    throw new OperationError(
+      r.status === 401 || r.status === 403 ? "AUTH_FAILED" : "NETWORK_ERROR",
+      `模型服务返回 HTTP ${r.status}。`,
+      undefined,
+      r.status === 429 || r.status >= 500,
+    );
+  return r.json() as T;
 }
 
 async function fetchTimeout(url: string, init?: RequestInit, ms = TIMEOUT_MS): Promise<Response> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
+  const options = discoveryContext.getStore();
+  const timeout = AbortSignal.timeout(options?.timeoutMs || ms);
+  const signal = options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const isCatalog = url === (options?.catalogUrl || CATALOG_URL);
   try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
-  } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") throw new Error(`Timeout after ${ms}ms: ${url}`);
-    throw err;
-  } finally {
-    clearTimeout(t);
+    return await (options?.fetch || fetch)(url, {
+      ...init,
+      headers: { ...init?.headers, ...(!isCatalog ? options?.headers : {}) },
+      signal,
+      redirect: "error",
+    });
+  } catch {
+    checkAbort(options?.signal);
+    if (timeout.aborted) throw new OperationError("TIMEOUT", "模型发现超时。", undefined, true);
+    throw new OperationError("NETWORK_ERROR", "无法访问模型服务。", undefined, true);
   }
+}
+
+export interface DiscoveryOptions {
+  signal?: AbortSignal;
+  catalogUrl?: string | null;
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  fetch?: typeof fetch;
+}
+const discoveryContext = new AsyncLocalStorage<DiscoveryOptions & { warnings: { code: string; message: string }[] }>();
+export async function discover(
+  providerId: string,
+  provider: ProviderConfig,
+  auth: { apiKey?: string; accountId?: string } = {},
+  options: DiscoveryOptions = {},
+) {
+  const warnings: { code: string; message: string }[] = [];
+  return discoveryContext.run({ ...options, warnings }, async () => {
+    checkAbort(options.signal);
+    const models =
+      provider.oauthProvider === "openai-codex" && auth.apiKey
+        ? await discoverCodexOAuthModels(providerId, provider, auth.apiKey, auth.accountId)
+        : await discoverModels(providerId, provider, auth.apiKey);
+    checkAbort(options.signal);
+    return { models, warnings };
+  });
+}
+export async function recommend(
+  modelId: string,
+  providerId: string,
+  provider: ProviderConfig,
+  options: DiscoveryOptions = {},
+) {
+  return discoveryContext.run({ ...options, warnings: [] }, async () => {
+    const result = await recommendModel(modelId, providerId, provider);
+    checkAbort(options.signal);
+    return result;
+  });
 }

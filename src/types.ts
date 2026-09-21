@@ -12,7 +12,10 @@ export function usesAuthHeader(api: KnownApi): boolean {
 
 export interface ModelConfig
   extends Partial<
-    Pick<Model<Api>, "baseUrl" | "reasoning" | "thinkingLevelMap" | "input" | "contextWindow" | "maxTokens" | "cost" | "headers">
+    Pick<
+      Model<Api>,
+      "baseUrl" | "reasoning" | "thinkingLevelMap" | "input" | "contextWindow" | "maxTokens" | "cost" | "headers"
+    >
   > {
   id: string;
   name?: string;
@@ -25,6 +28,9 @@ export interface ProviderConfig {
   baseUrl: string;
   api: KnownApi;
   apiKey?: string;
+  authMode?: "none" | "api_key" | "oauth";
+  /** Stable storage binding; never expose this as a credential value. */
+  credentialId?: string;
   /** Plugin-owned OAuth flow. Do not use models.json's built-in `oauth` field; Pi only accepts it for Radius. */
   oauthProvider?: KnownProvider;
   /** Optional OAuth credential JSON path. Empty means use the provider ID's stored Pi OAuth credential. */
