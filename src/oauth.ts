@@ -43,7 +43,7 @@ export class Authentication {
       return parseAuthStore(fs.readFileSync(path.join(this.directory, "auth.json"), "utf8"));
     } catch (error: any) {
       if (error.code === "ENOENT") return {};
-      throw new OperationError("AUTH_FAILED", "认证存储不可读取。");
+      throw new OperationError("AUTH_FAILED", "Could not read the credential store.");
     }
   }
   status(id: string, config: ProviderConfig) {
@@ -105,20 +105,22 @@ export class Authentication {
           oauthProvider: config.oauthProvider!,
         });
       } catch {
-        throw new OperationError("AUTH_FAILED", "无法读取所选 OAuth JSON 文件。");
+        throw new OperationError("AUTH_FAILED", "Could not read the selected OAuth JSON file.");
       }
     };
     return {
       read: async () => read(),
       list: async () => [{ providerId: this.key(id, config), type: "oauth" }],
       modify: async (_key, fn) => {
-        if (!fs.existsSync(file)) throw new OperationError("AUTH_FAILED", "所选 OAuth JSON 文件不存在。");
+        if (!fs.existsSync(file))
+          throw new OperationError("AUTH_FAILED", "The selected OAuth JSON file does not exist.");
         try {
           return await withLockedFile(
             file,
             signal,
             async (raw) => {
-              if (raw === undefined) throw new OperationError("AUTH_FAILED", "所选认证文件不存在。");
+              if (raw === undefined)
+                throw new OperationError("AUTH_FAILED", "The selected credential file does not exist.");
               const json = JSON.parse(raw);
               const current = credentialFromJson(json, { providerId: id, oauthProvider: config.oauthProvider! });
               const next = await fn(current);
@@ -141,11 +143,14 @@ export class Authentication {
         } catch (error) {
           checkAbort(signal);
           if (error instanceof OperationError) throw error;
-          throw new OperationError("AUTH_FAILED", "无法刷新或写入所选 OAuth JSON 文件。");
+          throw new OperationError("AUTH_FAILED", "Could not refresh or write the selected OAuth JSON file.");
         }
       },
       delete: async () => {
-        throw new OperationError("UNSUPPORTED_CAPABILITY", "外部认证文件不会被删除，请移除文件引用。");
+        throw new OperationError(
+          "UNSUPPORTED_CAPABILITY",
+          "External credential files are not deleted. Remove the file reference instead.",
+        );
       },
     };
   }
@@ -154,7 +159,7 @@ export class Authentication {
       config.oauthProvider === "radius"
         ? catalog.radiusProvider({ gateway: config.baseUrl })
         : this.providers().find((p) => p.id === config.oauthProvider);
-    if (!provider?.auth.oauth) throw new OperationError("UNSUPPORTED_CAPABILITY", "此 OAuth 方式不可用。");
+    if (!provider?.auth.oauth) throw new OperationError("UNSUPPORTED_CAPABILITY", "This OAuth method is unavailable.");
     return provider as Provider<Api>;
   }
   async resolve(id: string, config: ProviderConfig, signal?: AbortSignal, effects?: Effects): Promise<AuthResult> {
@@ -163,12 +168,15 @@ export class Authentication {
     if (this.mode(config) === "api_key") {
       const credential = this.raw()[this.key(id, config)];
       let key = credential?.type === "api_key" ? credential.key : config.apiKey;
-      if (!key) throw new OperationError("AUTH_REQUIRED", "请先由用户配置 API Key。");
+      if (!key) throw new OperationError("AUTH_REQUIRED", "A user must configure an API key first.");
       // Existing command-based credentials are deliberately not executed by management operations.
       if (key.startsWith("!"))
-        throw new OperationError("UNSUPPORTED_CAPABILITY", "请使用已存 API Key 或环境变量引用，不执行凭据命令。");
+        throw new OperationError(
+          "UNSUPPORTED_CAPABILITY",
+          "Use a stored API key or an environment variable reference. Credential commands are not executed.",
+        );
       if (/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(key)) key = process.env[key.replace(/^\$\{?|\}$/g, "")];
-      if (!key) throw new OperationError("AUTH_REQUIRED", "认证环境变量尚未设置。");
+      if (!key) throw new OperationError("AUTH_REQUIRED", "The credential environment variable is not set.");
       return { auth: { apiKey: key, ...(config.authHeader === false ? { headers: { Authorization: null } } : {}) } };
     }
     const provider = this.oauthProvider(config);
@@ -191,12 +199,12 @@ export class Authentication {
     try {
       const result = await models.getAuth(key);
       checkAbort(signal);
-      if (!result) throw new OperationError("AUTH_REQUIRED", "请先由用户完成 OAuth 登录。");
+      if (!result) throw new OperationError("AUTH_REQUIRED", "A user must complete OAuth sign-in first.");
       return result;
     } catch (error) {
       checkAbort(signal);
       if (error instanceof OperationError) throw error;
-      throw new OperationError("AUTH_FAILED", "OAuth 认证或刷新失败。", undefined, true);
+      throw new OperationError("AUTH_FAILED", "OAuth authentication or refresh failed.", undefined, true);
     }
   }
   async saveCredential(
@@ -213,15 +221,17 @@ export class Authentication {
     else await store.delete(this.key(id, config));
   }
   importedCredential(id: string, config: ProviderConfig, value: string): OAuthCredential {
-    if (this.mode(config) !== "oauth") throw new OperationError("VALIDATION_ERROR", "当前认证方式不是 OAuth。");
+    if (this.mode(config) !== "oauth")
+      throw new OperationError("VALIDATION_ERROR", "The current authentication method is not OAuth.");
     try {
       return credentialFromJson(JSON.parse(value), { providerId: id, oauthProvider: config.oauthProvider! });
     } catch {
-      throw new OperationError("VALIDATION_ERROR", "OAuth JSON 不包含有效认证数据。");
+      throw new OperationError("VALIDATION_ERROR", "The OAuth JSON does not contain valid credentials.");
     }
   }
   async login(config: ProviderConfig, context: OperationContext): Promise<OAuthCredential> {
-    if (context.caller !== "user_client") throw new OperationError("USER_ACTION_REQUIRED", "请由用户完成认证。");
+    if (context.caller !== "user_client")
+      throw new OperationError("USER_ACTION_REQUIRED", "A user must complete authentication.");
     const interaction: AuthInteraction = {
       signal: context.signal,
       prompt: (p) =>
@@ -237,11 +247,15 @@ export class Authentication {
         ),
       notify: (e) => {
         if (e.type === "auth_url")
-          context.notify({ kind: "open_url", message: e.instructions || "在浏览器中完成登录。", url: e.url });
+          context.notify({
+            kind: "open_url",
+            message: e.instructions || "Complete sign-in in your browser.",
+            url: e.url,
+          });
         else if (e.type === "device_code")
           context.notify({
             kind: "device_code",
-            message: "使用设备码完成登录。",
+            message: "Complete sign-in using the device code.",
             userCode: e.userCode,
             verificationUri: e.verificationUri,
           });
@@ -256,7 +270,7 @@ export class Authentication {
       checkAbort(context.signal);
       if (error instanceof OperationError) throw error;
       if (error instanceof Error && error.name === "AbortError") throw error;
-      throw new OperationError("AUTH_FAILED", "OAuth 登录未完成。", undefined, true);
+      throw new OperationError("AUTH_FAILED", "OAuth sign-in was not completed.", undefined, true);
     }
   }
   newBinding() {
@@ -376,6 +390,6 @@ function parseAuthStore(raw: string | undefined): Record<string, Credential> {
     safeKeys(value);
     return value as Record<string, Credential>;
   } catch {
-    throw new OperationError("AUTH_FAILED", "认证存储不是有效对象，未修改文件。");
+    throw new OperationError("AUTH_FAILED", "The credential store is not a valid object. The file was not changed.");
   }
 }

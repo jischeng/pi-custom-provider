@@ -37,7 +37,12 @@ export function createRuntimeAdapter(
       if (context) {
         await context.modelRegistry.refresh();
         if (context.modelRegistry.getError())
-          throw new OperationError("RUNTIME_SYNC_FAILED", "Pi 无法加载新模型配置。", undefined, true);
+          throw new OperationError(
+            "RUNTIME_SYNC_FAILED",
+            "Pi could not load the new model configuration.",
+            undefined,
+            true,
+          );
       }
     },
     active: () => context?.model,
@@ -52,7 +57,7 @@ export function managedProvider(id: string, config: ProviderConfig, auth: Authen
   const streams = Object.fromEntries(
     [...new Set([cfg.api, ...cfg.models.map((m) => m.api || cfg.api)])].map((api) => {
       const implementation = baseOAuth || getApiProvider(api);
-      if (!implementation) throw new OperationError("UNSUPPORTED_CAPABILITY", "Pi 没有该 API 的实现。");
+      if (!implementation) throw new OperationError("UNSUPPORTED_CAPABILITY", "Pi has no implementation for this API.");
       return [api, implementation];
     }),
   );

@@ -8,7 +8,7 @@
 
 截图来自旧版自绘向导：基线 `src/wizard.ts` 的 208、275、309、312 行分别包含横线、按键提示、Providers 和 Create New Provider，基线入口调用 `ctx.ui.custom`。当时个人 Pi 配置加载的是主目录 `/Users/d4rw1nz/dev/ai/pi-custom-provider`，新实现位于另一个 Git 工作区，尚未影响该界面。
 
-本次删除旧向导和对应状态机。新 `src/ui.ts` 只使用 Pi 的 `select/input/editor/confirm/notify/setStatus`，没有自绘组件、ANSI 输出或自定义按键处理。主分支合并后，需要在 Pi 中重新加载扩展或重启，以替换已加载的旧代码。
+初次改动删除旧向导和对应状态机，使用原生对话框。后续根据实际使用反馈，进一步改为直接复用 SettingsList、ExtensionEditorComponent 和 BorderedLoader，详见[界面重构说明](tui-refactor.md)。没有自绘组件、ANSI 输出或自定义按键处理。主分支合并后，需要在 Pi 中重新加载扩展或重启，以替换已加载的旧代码。
 
 ## 发现和修正
 
@@ -32,7 +32,7 @@
 - `pnpm typecheck`：通过。
 - `pnpm test`：30 项通过，包含真实 Pi 子进程 RPC、原版 RPC 不支持扩展命令的验证、无关插件、认证交互、工具确认和真实终端 PTY。
 - `pnpm pack:check`：通过，包含新运行代码和接口文档，排除旧向导和测试夹具。
-- `git diff --check`：通过；源代码检索没有 `ui.custom`、`handleInput`、`pi-tui` 或 `renderWizard`。
+- `git diff --check`：通过；初次改动源代码检索没有自绘实现；后续新增 pi-tui 原生组件依赖和挂载调用，未编写 render 或 handleInput。
 
 测试使用临时目录、隔离的 HOME、本地 HTTP 和假 OAuth 凭据。没有修改个人认证文件，没有向真实模型服务发送请求，也没有实际第三方账号登录验收。尚未对接 Pixle 或其他原生客户端；它们可按公开 RPC 文档适配。
 

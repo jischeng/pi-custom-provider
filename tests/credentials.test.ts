@@ -73,7 +73,7 @@ test("a file appearing empty after an absent-file read is not silently initializ
         },
         new AbortController().signal,
       ),
-      /配置/,
+      /configuration/,
     );
     assert.equal(fs.readFileSync(store.file, "utf8"), "");
   } finally {

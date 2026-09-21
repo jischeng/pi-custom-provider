@@ -55,7 +55,7 @@ test("a long-running operation retains its result for thirty minutes after compl
     await task.done;
     assert.equal(registry.get(task.snapshot.operationId).state, "succeeded");
     now += 30 * 60_000 + 1;
-    assert.throws(() => registry.get(task.snapshot.operationId), /过期/);
+    assert.throws(() => registry.get(task.snapshot.operationId), /expired/);
   } finally {
     await registry.dispose();
   }

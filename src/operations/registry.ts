@@ -26,10 +26,12 @@ export class OperationRegistry {
     private now: () => number = Date.now,
   ) {}
   register(namespace: string, definitions: OperationDefinition[]) {
-    if (!/^[a-z][a-z0-9-]*$/.test(namespace)) throw new OperationError("INVALID_NAMESPACE", "操作命名空间无效。");
+    if (!/^[a-z][a-z0-9-]*$/.test(namespace))
+      throw new OperationError("INVALID_NAMESPACE", "Invalid operation namespace.");
     for (const def of definitions) {
       const name = `${namespace}/${def.name}`;
-      if (this.definitions.has(name)) throw new OperationError("DUPLICATE_OPERATION", "操作已经注册。");
+      if (this.definitions.has(name))
+        throw new OperationError("DUPLICATE_OPERATION", "Operation is already registered.");
       this.definitions.set(name, { ...def, name });
     }
   }
@@ -40,22 +42,23 @@ export class OperationRegistry {
   }
   definition(name: string) {
     const d = this.definitions.get(name);
-    if (!d) throw new OperationError("NOT_FOUND", "操作不存在。");
+    if (!d) throw new OperationError("NOT_FOUND", "Operation not found.");
     return d;
   }
   invoke(name: string, args: unknown, caller: Caller = "user_client", requestId?: string, parentSignal?: AbortSignal) {
     this.prune();
     const def = this.definition(name);
     if (!def.allowedCallers.includes(caller))
-      throw new OperationError("USER_ACTION_REQUIRED", "此操作只能由用户客户端执行。");
+      throw new OperationError("USER_ACTION_REQUIRED", "This operation requires a user client.");
     const fingerprint = createHash("sha256").update(JSON.stringify({ name, args, caller })).digest("hex");
     const requestKey = requestId && `${caller}:${requestId}`;
     if (requestKey && this.requests.has(requestKey)) {
       const previous = this.requests.get(requestKey)!;
-      if (previous.fingerprint !== fingerprint) throw new OperationError("CONFLICT", "requestId 已用于不同请求。");
+      if (previous.fingerprint !== fingerprint)
+        throw new OperationError("CONFLICT", "requestId is already used by a different request.");
       return this.tasks.get(previous.operationId)!;
     }
-    if (this.tasks.size >= maxTasks) throw new OperationError("BUSY", "任务数量已达上限。", undefined, true);
+    if (this.tasks.size >= maxTasks) throw new OperationError("BUSY", "Operation limit reached.", undefined, true);
     const id = randomUUID();
     const controller = new AbortController();
     const onAbort = () => controller.abort(parentSignal?.reason);
@@ -91,7 +94,8 @@ export class OperationRegistry {
         }),
       prompt: (request, signal) =>
         new Promise<string>((resolve, reject) => {
-          if (caller !== "user_client") return reject(new OperationError("USER_ACTION_REQUIRED", "需要用户完成认证。"));
+          if (caller !== "user_client")
+            return reject(new OperationError("USER_ACTION_REQUIRED", "User authentication is required."));
           const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
           if (combined.aborted) return reject(new DOMException("Cancelled", "AbortError"));
           const interactionId = randomUUID();
@@ -133,15 +137,15 @@ export class OperationRegistry {
             .map((e) => ({
               path: String(e.instancePath ?? ""),
               code: "INVALID_FIELD",
-              message: "字段类型、值或必填约束不符合要求。",
+              message: "Invalid field type, value, or required constraint.",
             }));
-          throw new OperationError("VALIDATION_ERROR", "参数校验失败。", fields);
+          throw new OperationError("VALIDATION_ERROR", "Argument validation failed.", fields);
         }
         context.progress("executing");
         const data = await def.execute(args, context);
         if (Object.values(context.effects).every((v) => v === "unchanged")) controller.signal.throwIfAborted();
         if (!Value.Check(def.resultSchema, data))
-          throw new OperationError("INVALID_RESULT", "操作结果不符合已声明的数据结构。");
+          throw new OperationError("INVALID_RESULT", "Operation result does not match its declared schema.");
         result = { operationId: id, status: "succeeded", data, warnings: context.warnings, effects: context.effects };
       } catch (error) {
         const e = failure(error);
@@ -173,12 +177,12 @@ export class OperationRegistry {
   get(id: string): Snapshot {
     this.prune();
     const task = this.tasks.get(id);
-    if (!task) throw new OperationError("NOT_FOUND", "任务不存在或已过期。");
+    if (!task) throw new OperationError("NOT_FOUND", "Operation not found or expired.");
     return structuredClone(task.snapshot);
   }
   cancel(id: string) {
     const task = this.tasks.get(id);
-    if (!task) throw new OperationError("NOT_FOUND", "任务不存在。");
+    if (!task) throw new OperationError("NOT_FOUND", "Operation not found.");
     const accepted = task.cancellable && !task.snapshot.result;
     if (accepted) task.controller.abort();
     return { accepted, ...this.get(id) };
@@ -187,14 +191,15 @@ export class OperationRegistry {
     const task = this.tasks.get(id);
     const pending = task?.pending.get(interactionId);
     if (!task || !pending || pending.revision !== revision)
-      throw new OperationError("STALE_REVISION", "用户动作已结束或版本不匹配。");
+      throw new OperationError("STALE_REVISION", "The interaction has ended or its revision does not match.");
     if (cancelled) {
       task.controller.abort();
       return;
     }
-    if (typeof value !== "string" || value.length > 262144) throw new OperationError("VALIDATION_ERROR", "输入无效。");
+    if (typeof value !== "string" || value.length > 262144)
+      throw new OperationError("VALIDATION_ERROR", "Invalid input.");
     if (pending.request.options && !pending.request.options.some((o) => o.id === value))
-      throw new OperationError("VALIDATION_ERROR", "选项不存在。");
+      throw new OperationError("VALIDATION_ERROR", "Option not found.");
     pending.resolve(value);
   }
   async dispose() {

@@ -5,7 +5,7 @@
 ## 已实现
 
 - `src/domain`：共享配置、模型、草稿和认证操作；严格输入/输出校验；配置版本与草稿版本；文件锁和原子替换；保存与运行时同步分别报告结果。
-- `src/ui.ts`：仅调用 Pi 原生 select/input/editor/confirm/notify/setStatus。模型列表分页、过滤和选择通过原生选择框组合完成，没有自绘组件、ANSI 输出或按键解析。
+- `src/ui.ts` 和 `src/ui/`：页面依赖操作接口，原生 SettingsList 负责搜索、滚动、当前值和模型勾选，ExtensionEditorComponent 负责预填编辑，BorderedLoader 负责进度。ctx.ui.custom 仅用于挂载原生组件；没有自绘或按键解析。
 - `src/operations`：通用操作注册、描述、去重、任务状态、进度、取消、认证输入和安全错误。每个操作声明成功 data 的 JSON Schema。
 - `bin/pi-extension-rpc.mjs` 和 `src/rpc/extension.ts`：启动真实 Pi RPC，通过通用注册器执行扩展操作。原生 RPC 命令仍由 Pi 处理。通用传输代码没有供应商插件导入或插件名称分支。
 - `src/tools.ts`：模型可调用的管理子集，修改前使用原生用户确认，错误通过 Pi 的 tool_result 标记。
@@ -42,7 +42,7 @@ pnpm pack:check
 | `tests/rpc.test.ts` | 真实 Pi 子进程、直接管理、发现、保存后模型枚举、set_model、活动模型删除拒绝、任务查询和取消、错误、另一种无关插件；原版 Pi 明确不支持新命令；新认证不重启即用于发现和本地模型推理，RPC 中没有秘密 |
 | `tests/auth-rpc.test.ts` | 真实 RPC 上的认证选项 ID、设备码、手动输入、取消、过期响应拒绝和秘密过滤 |
 | `tests/tools.test.ts` | 真实 Pi agent 调度工具、错误 isError、拒绝写入、用户确认后写入；使用本地假模型 |
-| `tests/tui.test.ts` | 真实 Pi PTY 中使用原生控件完成新增、添加模型、保存、JSON 校验失败、改名、丢弃、拒绝删除与确认删除 |
+| `tests/tui.test.ts` | 真实 Pi PTY 中使用原生控件完成搜索设置、预填和重复编辑、原地切换、模型勾选、JSON 校验失败、保存、改名、丢弃及确认删除 |
 
 打包检查包含运行所需的新子目录、通用 CLI、协议文档和公开操作类型；不包含旧向导或测试夹具。
 

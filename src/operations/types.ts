@@ -52,5 +52,7 @@ export interface OperationDefinition {
   cancellable: boolean;
   execute(args: any, context: OperationContext): Promise<any>;
 }
+export type OperationDescriptor = Omit<OperationDefinition, "execute">;
+
 export const registrationChannel = "pi.extension-operations.register.v1";
 export type Registration = { namespace: string; operations: OperationDefinition[] };

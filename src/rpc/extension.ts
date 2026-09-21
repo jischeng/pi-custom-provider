@@ -22,9 +22,9 @@ export default function (pi: ExtensionAPI) {
       send({ type: "response", id: request?.id, command: request?.type, success: true, data });
     try {
       if (!request || typeof request !== "object" || Array.isArray(request) || typeof request.type !== "string")
-        throw new OperationError("VALIDATION_ERROR", "请求格式无效。");
+        throw new OperationError("VALIDATION_ERROR", "Invalid request format.");
       if (request.id !== undefined && (typeof request.id !== "string" || request.id.length > 128))
-        throw new OperationError("VALIDATION_ERROR", "请求 ID 无效。");
+        throw new OperationError("VALIDATION_ERROR", "Invalid request ID.");
       switch (request.type) {
         case "get_extension_operations":
           reply({
@@ -41,7 +41,7 @@ export default function (pi: ExtensionAPI) {
             !request.requestId ||
             request.requestId.length > 128
           )
-            throw new OperationError("VALIDATION_ERROR", "操作名和 requestId 必填。");
+            throw new OperationError("VALIDATION_ERROR", "Operation name and requestId are required.");
           const task = registry.invoke(request.operation, request.arguments, "user_client", request.requestId);
           reply(registry.get(task.snapshot.operationId));
           break;
@@ -63,7 +63,7 @@ export default function (pi: ExtensionAPI) {
           reply({ accepted: true });
           break;
         default:
-          throw new OperationError("NOT_FOUND", "未知通用操作命令。");
+          throw new OperationError("NOT_FOUND", "Unknown extension operation command.");
       }
     } catch (error) {
       const e = failure(error);

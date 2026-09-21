@@ -5,14 +5,14 @@ import { OperationError } from "../operations/errors";
 export const object = (properties: Record<string, TSchema>, options = {}) =>
   Type.Object(properties, { additionalProperties: false, ...options });
 export const text = (options = {}) => Type.String({ maxLength: 4096, ...options });
-export const id = text({ minLength: 1, maxLength: 128, pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*$", title: "供应商 ID" });
+export const id = text({ minLength: 1, maxLength: 128, pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*$", title: "Provider ID" });
 export const revision = text({ minLength: 1 });
 export const enumOf = (values: readonly string[], options = {}) =>
   Type.Union(
     values.map((v) => Type.Literal(v)),
     options,
   );
-export const apiSchema = enumOf(API_CHOICES, { title: "API 类型" });
+export const apiSchema = enumOf(API_CHOICES, { title: "API type" });
 const positive = Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
 // Pi includes -1000000 in catalog entries such as OpenRouter automatic routing. Preserve that marker.
 const rate = Type.Union([Type.Literal(-1000000), Type.Number({ minimum: 0, maximum: 1e9 })]);
@@ -106,37 +106,37 @@ export const compatSchema = object(
   { additionalProperties: true },
 );
 export const modelSchema = object({
-  id: text({ minLength: 1, maxLength: 256, title: "模型 ID" }),
-  name: Type.Optional(text({ title: "模型名称" })),
+  id: text({ minLength: 1, maxLength: 256, title: "Model ID" }),
+  name: Type.Optional(text({ title: "Model name" })),
   api: Type.Optional(apiSchema),
-  baseUrl: Type.Optional(text({ title: "模型 URL" })),
-  reasoning: Type.Optional(Type.Boolean({ title: "支持推理" })),
+  baseUrl: Type.Optional(text({ title: "Model URL" })),
+  reasoning: Type.Optional(Type.Boolean({ title: "Supports reasoning" })),
   input: Type.Optional(
-    Type.Array(enumOf(["text", "image"]), { minItems: 1, uniqueItems: true, maxItems: 2, title: "输入类型" }),
+    Type.Array(enumOf(["text", "image"]), { minItems: 1, uniqueItems: true, maxItems: 2, title: "Input types" }),
   ),
-  contextWindow: Type.Optional({ ...positive, title: "上下文长度" }),
-  maxTokens: Type.Optional({ ...positive, title: "最大输出长度" }),
-  cost: Type.Optional({ ...costSchema, title: "价格" }),
-  thinkingLevelMap: Type.Optional({ ...thinkingSchema, title: "思考等级映射" }),
-  compat: Type.Optional({ ...compatSchema, title: "兼容配置" }),
+  contextWindow: Type.Optional({ ...positive, title: "Context window" }),
+  maxTokens: Type.Optional({ ...positive, title: "Maximum output tokens" }),
+  cost: Type.Optional({ ...costSchema, title: "Pricing" }),
+  thinkingLevelMap: Type.Optional({ ...thinkingSchema, title: "Thinking level mapping" }),
+  compat: Type.Optional({ ...compatSchema, title: "Compatibility settings" }),
 });
 export const authSchema = Type.Union(
   [
     object({ mode: Type.Literal("none") }),
     object({ mode: Type.Literal("api_key") }),
-    object({ mode: Type.Literal("oauth"), methodId: text({ minLength: 1, title: "OAuth 提供方" }) }),
+    object({ mode: Type.Literal("oauth"), methodId: text({ minLength: 1, title: "OAuth provider" }) }),
   ],
-  { title: "认证方式" },
+  { title: "Authentication method" },
 );
 export const providerSchema = object({
   id,
-  name: Type.Optional(text({ title: "显示名称" })),
+  name: Type.Optional(text({ title: "Display name" })),
   api: apiSchema,
   baseUrl: text({ minLength: 1, title: "Base URL" }),
   auth: authSchema,
   authHeader: Type.Optional(enumOf(["auto", "on", "off"], { title: "Authorization Header" })),
   compat: Type.Optional(compatSchema),
-  models: Type.Array(modelSchema, { maxItems: 5000, title: "模型" }),
+  models: Type.Array(modelSchema, { maxItems: 5000, title: "Models" }),
 });
 export const patchSchema = object(
   Object.fromEntries(Object.entries(providerSchema.properties).map(([k, v]) => [k, Type.Optional(v)])),
@@ -151,13 +151,13 @@ export function validate(schema: TSchema, value: unknown) {
   if (!Value.Check(schema, value))
     throw new OperationError(
       "VALIDATION_ERROR",
-      "配置字段不符合要求。",
+      "Configuration validation failed.",
       Value.Errors(schema, value)
         .slice(0, 20)
         .map((e) => ({
           path: String(e.instancePath ?? ""),
           code: "INVALID_FIELD",
-          message: "字段类型、值或必填约束错误。",
+          message: "Invalid field type, value, or required constraint.",
         })),
     );
 }
@@ -166,17 +166,19 @@ export function validUrl(value: string) {
     const u = new URL(value);
     if (!["https:", "http:"].includes(u.protocol) || u.username || u.password || u.search || u.hash) throw new Error();
   } catch {
-    throw new OperationError("VALIDATION_ERROR", "URL 必须为 http/https，不能包含用户信息、查询参数或片段。", [
-      { path: "/baseUrl", code: "INVALID_URL", message: "URL 格式无效。" },
-    ]);
+    throw new OperationError(
+      "VALIDATION_ERROR",
+      "URL must use HTTP or HTTPS and cannot contain user information, query parameters, or fragments.",
+      [{ path: "/baseUrl", code: "INVALID_URL", message: "Invalid URL format." }],
+    );
   }
 }
 export function safeKeys(value: unknown, depth = 0): void {
-  if (depth > 20) throw new OperationError("VALIDATION_ERROR", "数据嵌套过深。");
+  if (depth > 20) throw new OperationError("VALIDATION_ERROR", "Data nesting is too deep.");
   if (!value || typeof value !== "object") return;
   for (const [key, v] of Object.entries(value)) {
     if (["__proto__", "prototype", "constructor"].includes(key))
-      throw new OperationError("VALIDATION_ERROR", "字段名称无效。");
+      throw new OperationError("VALIDATION_ERROR", "Invalid field name.");
     safeKeys(v, depth + 1);
   }
 }

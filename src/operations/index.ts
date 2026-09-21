@@ -8,6 +8,7 @@ export type {
   Interaction,
   OperationContext,
   OperationDefinition,
+  OperationDescriptor,
   Registration,
 } from "./types";
 export { OperationError } from "./errors";

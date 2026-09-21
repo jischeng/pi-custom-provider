@@ -7,8 +7,8 @@ export default function (pi: ExtensionAPI) {
     operations: [
       {
         name: "length",
-        title: "字符数量",
-        description: "与供应商无关的测试操作",
+        title: "Character count",
+        description: "Test operation unrelated to provider management",
         inputSchema: Type.Object({ text: Type.String() }, { additionalProperties: false }),
         resultSchema: Type.Object({ length: Type.Number() }),
         effects: ["read"],

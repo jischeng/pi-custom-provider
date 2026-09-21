@@ -72,7 +72,7 @@ export class ProviderService {
   private stored(id: string) {
     const s = this.store.read();
     const p = s.config.providers[id];
-    if (!p) throw new OperationError("NOT_FOUND", "供应商不存在。");
+    if (!p) throw new OperationError("NOT_FOUND", "Provider not found.");
     return { ...s, provider: this.normalized(id, p) };
   }
   private publicConfig(id: string, provider: ProviderConfig): any {
@@ -116,7 +116,7 @@ export class ProviderService {
           ?.slice(0, 3)
           .map((field) => field.path)
           .join("、") || prefix;
-      throw new OperationError(error.code, `${error.message} 位置：${locations}`, fields, error.retryable);
+      throw new OperationError(error.code, `${error.message} Location: ${locations}`, fields, error.retryable);
     }
     return {
       ...values,
@@ -138,19 +138,23 @@ export class ProviderService {
     validate(providerSchema, values);
     safeKeys(values);
     this.validateUrls(values);
-    if (!API_CHOICES.includes(values.api)) throw new OperationError("VALIDATION_ERROR", "API 不受支持。");
+    if (!API_CHOICES.includes(values.api)) throw new OperationError("VALIDATION_ERROR", "Unsupported API.");
     if (["constructor", "prototype", "__proto__"].includes(values.id))
-      throw new OperationError("VALIDATION_ERROR", "供应商 ID 无效。");
+      throw new OperationError("VALIDATION_ERROR", "Invalid provider ID.");
     if (values.auth.mode !== "oauth" && !apiSupportsApiKey(values.api))
-      throw new OperationError("VALIDATION_ERROR", "此 API 需要选择兼容的 OAuth 方式。", [
-        { path: "/auth/mode", code: "INCOMPATIBLE_AUTH", message: "该 API 不支持此认证方式。" },
+      throw new OperationError("VALIDATION_ERROR", "This API requires a compatible OAuth method.", [
+        {
+          path: "/auth/mode",
+          code: "INCOMPATIBLE_AUTH",
+          message: "This API does not support the selected authentication method.",
+        },
       ]);
     if (values.auth.mode === "oauth" && !oauthProviderChoicesForApi(values.api).includes(values.auth.methodId))
-      throw new OperationError("VALIDATION_ERROR", "认证方式不支持此 API。", [
-        { path: "/auth/methodId", code: "INCOMPATIBLE_AUTH", message: "请选择兼容的 OAuth 提供方。" },
+      throw new OperationError("VALIDATION_ERROR", "The authentication method does not support this API.", [
+        { path: "/auth/methodId", code: "INCOMPATIBLE_AUTH", message: "Select a compatible OAuth provider." },
       ]);
     if (new Set(values.models.map((m: any) => m.id)).size !== values.models.length)
-      throw new OperationError("VALIDATION_ERROR", "模型 ID 重复。");
+      throw new OperationError("VALIDATION_ERROR", "Duplicate model IDs.");
     const { id: _id, auth, authHeader, ...config } = values;
     const next: ProviderConfig = {
       ...config,
@@ -198,21 +202,29 @@ export class ProviderService {
       builtinProviders().some((p) => p.id === id) ||
       this.options.runtime.exists?.(id)
     )
-      throw new OperationError("CONFLICT", "此供应商 ID 已被使用。");
+      throw new OperationError("CONFLICT", "This provider ID is already in use.");
   }
   private requireIdle(original?: string, next?: ProviderConfig, nextId?: string, caller = "user_client") {
     if (
       this.options.runtime.busy() &&
       (caller !== "model_tool" || this.options.runtime.active()?.provider === original)
     )
-      throw new OperationError("BUSY", "Pi 正在执行模型请求，请稍后修改。", undefined, true);
+      throw new OperationError(
+        "BUSY",
+        "Pi is running a model request. Try editing again when it finishes.",
+        undefined,
+        true,
+      );
     const active = this.options.runtime.active();
     if (
       active &&
       active.provider === original &&
       (!next || nextId !== original || !next.models.some((m) => m.id === active.id))
     )
-      throw new OperationError("ACTIVE_MODEL_IN_USE", "请先切换当前对话模型，再删除或改名。");
+      throw new OperationError(
+        "ACTIVE_MODEL_IN_USE",
+        "Switch the current conversation model before deleting or renaming this provider.",
+      );
   }
   private pruneDrafts() {
     for (const [key, draft] of this.drafts) if (this.now() - draft.updated > 30 * 60_000) this.drafts.delete(key);
@@ -220,9 +232,9 @@ export class ProviderService {
   private draft(id: string, expected?: number) {
     this.pruneDrafts();
     const d = this.drafts.get(id);
-    if (!d) throw new OperationError("NOT_FOUND", "草稿不存在或已过期。");
+    if (!d) throw new OperationError("NOT_FOUND", "Draft not found or expired.");
     if (expected !== undefined && d.revision !== expected)
-      throw new OperationError("STALE_REVISION", "草稿已更新，请重新读取。");
+      throw new OperationError("STALE_REVISION", "The draft has changed. Reload it and try again.");
     d.updated = this.now();
     return d;
   }
@@ -255,7 +267,7 @@ export class ProviderService {
   }
   private newDraft(id: string, provider: ProviderConfig, baseConfigRevision: string, originalId?: string) {
     this.pruneDrafts();
-    if (this.drafts.size >= 100) throw new OperationError("BUSY", "草稿过多，请先关闭旧草稿。");
+    if (this.drafts.size >= 100) throw new OperationError("BUSY", "Draft limit reached. Close existing drafts first.");
     const d: Draft = {
       draftId: randomUUID(),
       revision: 1,
@@ -308,7 +320,12 @@ export class ProviderService {
       } catch {
         this.runtimeFailed = true;
         context.effects.runtime = "failed";
-        throw new OperationError("RUNTIME_SYNC_FAILED", "Pi 注册失败，请重试同步。", undefined, true);
+        throw new OperationError(
+          "RUNTIME_SYNC_FAILED",
+          "Pi registration failed. Retry synchronization.",
+          undefined,
+          true,
+        );
       }
     });
     this.syncTail = pending.catch(() => {});
@@ -324,7 +341,10 @@ export class ProviderService {
       snapshot.baseConfigRevision,
       (config) => {
         if (draft && this.drafts.get(draft.draftId)?.revision !== draft.revision)
-          throw new OperationError("STALE_REVISION", "保存期间草稿已修改或丢弃，请重新读取。");
+          throw new OperationError(
+            "STALE_REVISION",
+            "The draft was edited or discarded while saving. Reload it and try again.",
+          );
         this.requireIdle(snapshot.originalId, snapshot.provider, snapshot.id, ctx.caller);
         this.conflictId(snapshot.id, snapshot.originalId);
         if (snapshot.originalId && snapshot.originalId !== snapshot.id) delete config.providers[snapshot.originalId];
@@ -352,7 +372,7 @@ export class ProviderService {
           throw new Error();
         offset = c.offset;
       } catch {
-        throw new OperationError("STALE_REVISION", "分页位置已过期。");
+        throw new OperationError("STALE_REVISION", "The page cursor has expired.");
       }
     }
     const filtered = args.filter
@@ -406,7 +426,7 @@ export class ProviderService {
     };
     const eitherTarget = Type.Union([target, object(draftTarget)]);
     return [
-      def("provider.list", "供应商列表", object(pageSchema), ["read"], async (a) => {
+      def("provider.list", "List providers", object(pageSchema), ["read"], async (a) => {
         const s = this.store.read();
         return {
           ...this.page(
@@ -417,18 +437,18 @@ export class ProviderService {
           revision: s.revision,
         };
       }),
-      def("provider.get", "供应商详情", target, ["read"], async (a) => {
+      def("provider.get", "Provider details", target, ["read"], async (a) => {
         const s = this.stored(a.providerId);
         return this.view(a.providerId, s.provider, s.revision);
       }),
-      def("provider.create", "新增供应商", providerSchema, ["config_write"], async (a, c) => {
+      def("provider.create", "Create provider", providerSchema, ["config_write"], async (a, c) => {
         this.conflictId(a.id);
         const s = this.store.read();
         return this.save({ id: a.id, provider: this.build(a), baseConfigRevision: s.revision }, c);
       }),
       def(
         "provider.update",
-        "修改供应商",
+        "Update provider",
         object({
           providerId: id,
           expectedRevision: revision,
@@ -438,7 +458,8 @@ export class ProviderService {
         ["config_write"],
         async (a, c) => {
           const s = this.stored(a.providerId);
-          if (s.revision !== a.expectedRevision) throw new OperationError("CONFLICT", "配置已修改，请重新读取。");
+          if (s.revision !== a.expectedRevision)
+            throw new OperationError("CONFLICT", "The configuration has changed. Reload it and try again.");
           const values = { ...this.publicConfig(a.providerId, s.provider), ...a.set };
           for (const key of a.unset || []) delete values[key];
           return this.save(
@@ -454,7 +475,7 @@ export class ProviderService {
       ),
       def(
         "provider.delete",
-        "删除供应商",
+        "Delete provider",
         object({ providerId: id, expectedRevision: revision }),
         ["config_write"],
         async (a, c) => {
@@ -472,30 +493,36 @@ export class ProviderService {
           return { deleted: a.providerId, credentialsRetained: true };
         },
       ),
-      def("runtime.sync", "重新同步 Pi 模型", object({}), ["read"], async (_a, c) => {
+      def("runtime.sync", "Resync Pi models", object({}), ["read"], async (_a, c) => {
         this.requireIdle();
         await this.sync(c);
         return { ready: true };
       }),
-      def("catalog.list", "API 与认证选项", object({ api: Type.Optional(apiSchema) }), ["read"], async (a) => ({
-        apis: API_CHOICES.map((id) => ({ id, label: apiLabel(id) })),
-        authMethods: [
-          ...(!a.api || apiSupportsApiKey(a.api)
-            ? [
-                { id: "none", label: "无认证", value: { mode: "none" } },
-                { id: "api_key", label: "API Key", value: { mode: "api_key" } },
-              ]
-            : []),
-          ...(a.api ? oauthProviderChoicesForApi(a.api) : OAUTH_PROVIDER_CHOICES).map((id) => ({
-            id: `oauth/${id}`,
-            label: oauthProviderLabel(id),
-            value: { mode: "oauth", methodId: id },
-          })),
-        ],
-      })),
+      def(
+        "catalog.list",
+        "API and authentication options",
+        object({ api: Type.Optional(apiSchema) }),
+        ["read"],
+        async (a) => ({
+          apis: API_CHOICES.map((id) => ({ id, label: apiLabel(id) })),
+          authMethods: [
+            ...(!a.api || apiSupportsApiKey(a.api)
+              ? [
+                  { id: "none", label: "No authentication", value: { mode: "none" } },
+                  { id: "api_key", label: "API Key", value: { mode: "api_key" } },
+                ]
+              : []),
+            ...(a.api ? oauthProviderChoicesForApi(a.api) : OAUTH_PROVIDER_CHOICES).map((id) => ({
+              id: `oauth/${id}`,
+              label: oauthProviderLabel(id),
+              value: { mode: "oauth", methodId: id },
+            })),
+          ],
+        }),
+      ),
       def(
         "catalog.presets",
-        "模型预设",
+        "Model presets",
         object({ api: apiSchema, modelId: text(), ...pageSchema }),
         ["read"],
         async (a) =>
@@ -511,7 +538,7 @@ export class ProviderService {
       ),
       def(
         "draft.create",
-        "新建配置草稿",
+        "Create configuration draft",
         providerSchema,
         ["read"],
         async (a) => {
@@ -522,7 +549,7 @@ export class ProviderService {
       ),
       def(
         "draft.open",
-        "编辑已有配置",
+        "Edit existing configuration",
         target,
         ["read"],
         async (a) => {
@@ -533,7 +560,7 @@ export class ProviderService {
       ),
       def(
         "draft.get",
-        "查询草稿",
+        "Get draft",
         object({ draftId: text() }),
         ["read"],
         async (a) => this.draftView(this.draft(a.draftId)),
@@ -541,7 +568,7 @@ export class ProviderService {
       ),
       def(
         "draft.patch",
-        "修改草稿",
+        "Update draft",
         object({ ...draftTarget, set: patchSchema, unset: Type.Optional(Type.Array(enumOf(["name", "compat"]))) }),
         ["read"],
         async (a) => {
@@ -554,7 +581,7 @@ export class ProviderService {
       ),
       def(
         "draft.validate",
-        "校验草稿",
+        "Validate draft",
         object(draftTarget),
         ["read"],
         async (a) => {
@@ -566,7 +593,7 @@ export class ProviderService {
       ),
       def(
         "draft.commit",
-        "保存草稿",
+        "Save draft",
         object(draftTarget),
         ["config_write"],
         async (a, c) => {
@@ -577,7 +604,7 @@ export class ProviderService {
       ),
       def(
         "draft.discard",
-        "丢弃草稿",
+        "Discard draft",
         object(draftTarget),
         ["read"],
         async (a) => {
@@ -589,14 +616,14 @@ export class ProviderService {
       ),
       def(
         "draft.selectModels",
-        "选择模型",
+        "Select models",
         object({ ...draftTarget, ...select }),
         ["read"],
         async (a) => {
           const d = this.draft(a.draftId, a.revision);
           const candidates = new Map([...d.candidates, ...d.provider.models].map((m) => [m.id, m]));
           if (a.modelIds.some((id: string) => !candidates.has(id)))
-            throw new OperationError("VALIDATION_ERROR", "模型不属于当前候选集合。");
+            throw new OperationError("VALIDATION_ERROR", "The model is not in the current candidate list.");
           const models = a.modelIds.map((id: string) => {
             const { suggestedBy, headers, ...model } = candidates.get(id) as ModelConfig & { suggestedBy?: string };
             return model;
@@ -607,7 +634,7 @@ export class ProviderService {
       ),
       def(
         "draft.upsertModel",
-        "添加或修改模型",
+        "Add or update model",
         object({ ...draftTarget, model: modelSchema }),
         ["read"],
         async (a) => {
@@ -619,7 +646,7 @@ export class ProviderService {
       ),
       def(
         "draft.removeModel",
-        "删除草稿模型",
+        "Remove draft model",
         object({ ...draftTarget, modelId: text() }),
         ["read"],
         async (a) => {
@@ -635,24 +662,24 @@ export class ProviderService {
       ),
       def(
         "draft.applyPreset",
-        "应用完整模型预设",
+        "Apply complete model preset",
         object({ ...draftTarget, modelId: text(), presetId: text() }),
         ["read"],
         async (a) => {
           const d = this.draft(a.draftId, a.revision);
           const model = d.provider.models.find((m) => m.id === a.modelId);
-          if (!model) throw new OperationError("NOT_FOUND", "模型不存在。");
+          if (!model) throw new OperationError("NOT_FOUND", "Model not found.");
           const preset = listModelPresets(d.provider.api, a.modelId).find((p) => p.key === a.presetId);
-          if (!preset) throw new OperationError("NOT_FOUND", "预设不存在。");
+          if (!preset) throw new OperationError("NOT_FOUND", "Preset not found.");
           const { suggestedBy, ...fields } = preset.model;
           const models = d.provider.models.map((m) => (m.id === a.modelId ? { ...m, ...fields, id: a.modelId } : m));
           return this.updateDraft(d, this.publicConfig(d.id, { ...d.provider, models }));
         },
         true,
       ),
-      def("model.discover", "发现供应商模型", eitherTarget, ["network"], async (a, c) => {
+      def("model.discover", "Discover provider models", eitherTarget, ["network"], async (a, c) => {
         if (c.caller === "model_tool" && a.draftId)
-          throw new OperationError("USER_ACTION_REQUIRED", "模型工具不能修改用户草稿。");
+          throw new OperationError("USER_ACTION_REQUIRED", "Model tools cannot modify user drafts.");
         const target = resolveTarget(a);
         const atRevision = target.draft?.revision;
         const resolved = await this.auth.resolve(target.id, target.provider, c.signal, c.effects);
@@ -686,7 +713,7 @@ export class ProviderService {
       }),
       def(
         "model.recommend",
-        "补充模型元数据",
+        "Enrich model metadata",
         object({ providerId: id, modelId: text() }),
         ["network"],
         async (a, c) => {
@@ -700,7 +727,7 @@ export class ProviderService {
       ),
       def(
         "provider.selectModels",
-        "保存所选模型",
+        "Save selected models",
         object({ providerId: id, expectedRevision: revision, models: Type.Array(modelSchema, { maxItems: 5000 }) }),
         ["config_write"],
         async (a, c) => {
@@ -716,13 +743,18 @@ export class ProviderService {
           );
         },
       ),
-      def("auth.status", "认证状态", target, ["read"], async (a) =>
+      def("auth.status", "Authentication status", target, ["read"], async (a) =>
         this.auth.status(a.providerId, this.stored(a.providerId).provider),
       ),
       ...(["configure", "import", "begin", "clear"] as const).map((action) =>
         def(
           `auth.${action}`,
-          { configure: "设置 API Key", import: "导入 OAuth JSON", begin: "开始 OAuth 登录", clear: "清除认证" }[action],
+          {
+            configure: "Set API key",
+            import: "Import OAuth JSON",
+            begin: "Start OAuth sign-in",
+            clear: "Clear credentials",
+          }[action],
           object({
             providerId: id,
             expectedRevision: revision,
@@ -732,10 +764,10 @@ export class ProviderService {
           async (a, c) => {
             const s = this.stored(a.providerId);
             if (s.revision !== a.expectedRevision)
-              throw new OperationError("CONFLICT", "配置已变化，请重新读取后认证。");
+              throw new OperationError("CONFLICT", "The configuration has changed. Reload it before authenticating.");
             this.requireIdle();
             if (action === "configure" && this.auth.mode(s.provider) !== "api_key")
-              throw new OperationError("VALIDATION_ERROR", "当前认证方式不是 API Key。");
+              throw new OperationError("VALIDATION_ERROR", "The current authentication method is not API key.");
             const credential =
               action === "begin"
                 ? await this.auth.login(s.provider, c)
@@ -764,14 +796,14 @@ export class ProviderService {
       ),
       def(
         "auth.file",
-        "设置服务端 OAuth 文件",
+        "Set server-side OAuth file",
         object({ providerId: id, expectedRevision: revision, path: secret }),
         ["config_write"],
         async (a, c) => {
           const s = this.stored(a.providerId);
           this.requireIdle();
-          if (!s.provider.oauthProvider) throw new OperationError("VALIDATION_ERROR", "请选择 OAuth 方式。");
-          if (!fs.existsSync(a.path)) throw new OperationError("NOT_FOUND", "服务端文件不存在。");
+          if (!s.provider.oauthProvider) throw new OperationError("VALIDATION_ERROR", "Select an OAuth method.");
+          if (!fs.existsSync(a.path)) throw new OperationError("NOT_FOUND", "The server-side file does not exist.");
           await this.store.commit(
             a.expectedRevision,
             (config) => {
@@ -787,7 +819,7 @@ export class ProviderService {
       ),
       def(
         "headers.set",
-        "设置请求 Header",
+        "Set request header",
         object({
           providerId: id,
           expectedRevision: revision,
@@ -799,14 +831,14 @@ export class ProviderService {
         async (a, c) => {
           this.requireIdle();
           if (a.value && /[\r\n]/.test(a.value))
-            throw new OperationError("VALIDATION_ERROR", "Header 值不能包含换行。");
+            throw new OperationError("VALIDATION_ERROR", "Header values cannot contain line breaks.");
           await this.store.commit(
             a.expectedRevision,
             (config) => {
               const p = config.providers[a.providerId];
-              if (!p) throw new OperationError("NOT_FOUND", "供应商不存在。");
+              if (!p) throw new OperationError("NOT_FOUND", "Provider not found.");
               const holder = a.modelId ? p.models.find((m) => m.id === a.modelId) : p;
-              if (!holder) throw new OperationError("NOT_FOUND", "模型不存在。");
+              if (!holder) throw new OperationError("NOT_FOUND", "Model not found.");
               holder.headers = { ...holder.headers };
               if (a.value === undefined) delete holder.headers[a.name];
               else holder.headers[a.name] = a.value;

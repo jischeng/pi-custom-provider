@@ -26,19 +26,22 @@ export function registerManagementTools(pi: ExtensionAPI, service: ProviderServi
     pi.registerTool({
       name,
       label: operation.title,
-      description: `${operation.title}。不接收或返回凭据；写入需要用户确认。`,
+      description: `${operation.title}. Does not accept or return credentials. Writes require user confirmation.`,
       parameters: operation.inputSchema,
       executionMode: writes ? "sequential" : "parallel",
       execute: async (_id, args, signal, onUpdate, ctx) => {
         if (writes) {
           if (!ctx.hasUI)
             return {
-              content: [{ type: "text", text: "需要用户确认，请使用 /provider-setup。" }],
+              content: [{ type: "text", text: "User confirmation is required. Use /provider-setup." }],
               details: unexecuted("requires_user_action"),
             };
           const confirmed = await ctx.ui.confirm(operation.title, JSON.stringify(args, null, 2), { signal });
           if (!confirmed)
-            return { content: [{ type: "text", text: "用户未确认，未修改配置。" }], details: unexecuted("cancelled") };
+            return {
+              content: [{ type: "text", text: "The user did not confirm. The configuration was not changed." }],
+              details: unexecuted("cancelled"),
+            };
         }
         const registry = new OperationRegistry((event) => {
           if (event.type === "extension_operation_update")
@@ -73,7 +76,7 @@ function unexecuted(status: "cancelled" | "requires_user_action") {
     status,
     error: {
       code: status === "cancelled" ? "CANCELLED" : "USER_ACTION_REQUIRED",
-      message: status === "cancelled" ? "用户未确认。" : "需要用户确认。",
+      message: status === "cancelled" ? "The user did not confirm." : "User confirmation is required.",
       retryable: false,
     },
     warnings: [],

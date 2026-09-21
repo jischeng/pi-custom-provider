@@ -13,12 +13,12 @@ pnpm install --frozen-lockfile
 pnpm exec pi -e ./src/index.ts
 ```
 
-进入 Pi 后执行 `/provider-setup`。所有选择、输入、JSON 编辑、确认和通知均使用 **Pi 原生 `ctx.ui` 控件**；没有自绘终端组件或自定义按键处理。
+进入 Pi 后执行 `/provider-setup`。界面使用英文。设置和模型选择复用 Pi 的 `SettingsList`，可直接搜索、查看当前值和切换选项；预填编辑使用 `ExtensionEditorComponent`，进度使用 `BorderedLoader`。`ctx.ui.custom` 仅挂载这些原生组件，没有自绘或自定义按键处理。
 
 1. 新增供应商，填写 API 类型、接口地址、ID 和认证方式。
-2. 添加模型，或先保存供应商，再从“配置认证”设置 API Key、登录 OAuth 或导入 OAuth JSON。
-3. 编辑配置并发现模型。候选区支持过滤、分页、全选和取消选择，目录推荐会标明来源。
-4. 编辑模型字段、应用 Pi 模型预设，然后明确选择“保存”。丢弃草稿不会保存修改。
+2. 添加模型，或先保存供应商，再从 `Credentials`设置 API Key、登录 OAuth 或导入 OAuth JSON。
+3. 编辑配置并发现模型。候选区支持原生搜索、滚动和逐项勾选，目录推荐会标明来源。
+4. 编辑模型字段、应用 Pi 模型预设，然后明确选择 `Save changes`。丢弃草稿不会保存修改。
 5. 在 Pi 的模型选择器中选择模型。
 
 支持显示名称、改名、模型增删、价格及价格分档、思考等级、兼容配置，以及供应商和模型的请求 Header。可清除可选字段。保存后立即同步到 Pi；当前对话正在使用的供应商不能改名、删除或移除当前模型。
@@ -78,3 +78,5 @@ pnpm pack:check
 - [Pi 0.82.0 接口核对及更正](docs/pi-0.82.0-interface-audit.md)
 
 未修改 Pi 上游或 Pixle，尚未对接实际原生客户端；客户端可以按公开协议独立适配。
+
+界面只依赖操作描述和结果，不引用业务服务或配置存储；RPC、TUI 和模型工具复用同一组业务操作。详见[重构说明](docs/tui-refactor.md)。

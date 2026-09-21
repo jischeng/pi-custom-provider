@@ -49,12 +49,14 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.82.0",
     "@earendil-works/pi-coding-agent": "0.82.0",
+    "@earendil-works/pi-tui": "0.82.0",
     "typebox": "1.3.8"
   },
   "pnpm": {
     "onlyBuiltDependencies": []
   },
   "devDependencies": {
+    "@earendil-works/pi-tui": "0.82.0",
     "@types/node": "24.12.4",
     "@types/proper-lockfile": "4.1.4",
     "prettier": "3.6.2",

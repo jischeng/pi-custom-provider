@@ -6,10 +6,14 @@ import { createRuntimeAdapter } from "./provider-registry";
 import { registrationChannel } from "./operations/types";
 import { failure } from "./operations/errors";
 import { runSetup } from "./ui";
+import { createUiOperations } from "./ui/operations";
 import { registerManagementTools } from "./tools";
 
 export default function (pi: ExtensionAPI) {
-  pi.registerFlag("provider-catalog-url", { description: "模型元数据目录 URL，off 禁用远端目录", type: "string" });
+  pi.registerFlag("provider-catalog-url", {
+    description: "Model metadata catalog URL; use off to disable the remote catalog",
+    type: "string",
+  });
   const catalogUrl = pi.getFlag("provider-catalog-url");
   const directory = getAgentDir();
   const auth = new Authentication(directory);
@@ -40,7 +44,7 @@ export default function (pi: ExtensionAPI) {
     service.dispose();
   });
   pi.registerCommand("provider-setup", {
-    description: "管理供应商、模型及认证（Pi 原生界面）",
+    description: "Manage providers, models, and authentication using native Pi controls",
     handler: async (args, ctx) => {
       runtime.bind(ctx);
       if (args.trim() === "cancel") {
@@ -48,16 +52,19 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       if (ctx.mode !== "tui") {
-        ctx.ui.notify("程序接口请使用通用扩展操作 RPC，不通过此终端命令执行。", "error");
+        ctx.ui.notify(
+          "Use the extension operations RPC for programmatic access. This command is for the terminal UI.",
+          "error",
+        );
         return;
       }
       if (controller) {
-        ctx.ui.notify("供应商管理已打开。", "warning");
+        ctx.ui.notify("Provider management is already open.", "warning");
         return;
       }
       controller = new AbortController();
       try {
-        await runSetup(service, ctx, controller.signal);
+        await runSetup(createUiOperations(service.definitions(), ctx), ctx, controller.signal);
       } finally {
         controller = undefined;
       }

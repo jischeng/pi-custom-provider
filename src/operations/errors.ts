@@ -19,11 +19,15 @@ export function failure(error: unknown): Failure {
   if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError"))
     return {
       code: error.name === "TimeoutError" ? "TIMEOUT" : "CANCELLED",
-      message: error.name === "TimeoutError" ? "操作超时。" : "操作已取消。",
+      message: error.name === "TimeoutError" ? "Operation timed out." : "Operation cancelled.",
       retryable: true,
     };
   // Raw provider, filesystem and credential errors must never cross this boundary.
-  return { code: "INTERNAL_ERROR", message: "操作失败，请检查服务配置后重试。", retryable: false };
+  return {
+    code: "INTERNAL_ERROR",
+    message: "Operation failed. Check the service configuration and try again.",
+    retryable: false,
+  };
 }
 export function checkAbort(signal?: AbortSignal): void {
   signal?.throwIfAborted();

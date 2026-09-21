@@ -11,11 +11,11 @@ pnpm install --frozen-lockfile
 pnpm exec pi -e ./src/index.ts
 ```
 
-Run `/provider-setup`. Every selector, input, editor, confirmation, and notification uses Pi's native `ctx.ui` APIs. There is no custom terminal renderer or key handler.
+Run `/provider-setup`. The English UI uses Pi's native `SettingsList` for searchable provider settings and in-place model toggles, `ExtensionEditorComponent` for prefilled editing, and `BorderedLoader` for progress. `ctx.ui.custom` only mounts those existing components. There is no custom terminal renderer or key handler.
 
 Create a provider, choose its API and authentication method, and add models. Save the provider before configuring credentials, then reopen it to discover models. Review model metadata or apply a complete Pi preset and explicitly save. Discarding a draft does not write configuration.
 
-The interface supports provider renaming, model selection with filtering and pagination, full model metadata including cost tiers, optional-field removal, compatibility settings, and write-only provider/model headers. Changes immediately synchronize with Pi. Switch the active model before renaming or deleting its provider or removing that model.
+The interface supports provider renaming, model selection with native search and scrolling, full model metadata including cost tiers, optional-field removal, compatibility settings, and write-only provider/model headers. Changes immediately synchronize with Pi. Switch the active model before renaming or deleting its provider or removing that model.
 
 Pi's native credential input is visible; the interface tells you this and never prefills stored secrets. OAuth supports Pi authentication flows, JSON import, and explicit server-side file references. File-backed refresh updates the selected file. Logging in again, importing, or clearing credentials detaches an old file reference. Changing an endpoint, API, or authentication method detaches previous credentials and headers.
 
@@ -64,3 +64,5 @@ Tests use isolated directories, actual Pi processes, local HTTP fixtures, and fa
 - [Pi interface audit and corrections](docs/pi-0.82.0-interface-audit.md)
 
 Pi upstream and Pixle are unchanged. No actual native client integration is claimed; clients can implement the documented generic protocol independently.
+
+The UI consumes operation descriptors and results through a small client interface. Domain rules and persistence stay outside the UI; RPC and agent tools use the same operations. See [design and tradeoffs](docs/tui-refactor.md).

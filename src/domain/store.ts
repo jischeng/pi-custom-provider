@@ -15,7 +15,8 @@ export class ConfigStore {
     try {
       raw = fs.readFileSync(this.file, "utf8");
     } catch (error: any) {
-      if (error.code !== "ENOENT") throw new OperationError("CONFIG_READ_FAILED", "无法读取模型配置。");
+      if (error.code !== "ENOENT")
+        throw new OperationError("CONFIG_READ_FAILED", "Could not read the model configuration.");
     }
     return this.decode(raw);
   }
@@ -41,7 +42,10 @@ export class ConfigStore {
           .digest("hex"),
       };
     } catch {
-      throw new OperationError("CONFIG_READ_FAILED", "模型配置不是有效对象；未进行任何修复或覆盖。");
+      throw new OperationError(
+        "CONFIG_READ_FAILED",
+        "The model configuration is not a valid object. Nothing was repaired or overwritten.",
+      );
     }
   }
   async commit(expected: string, mutate: (config: ModelsConfig) => void | Promise<void>, signal: AbortSignal) {
@@ -51,7 +55,11 @@ export class ConfigStore {
       return await withLockedFile(this.file, signal, async (raw) => {
         checkAbort(signal);
         const state = this.decode(raw);
-        if (state.revision !== expected) throw new OperationError("CONFLICT", "配置已由其他操作修改，请重新读取。");
+        if (state.revision !== expected)
+          throw new OperationError(
+            "CONFLICT",
+            "The configuration was changed by another operation. Reload it and try again.",
+          );
         await mutate(state.config);
         safeKeys(state.config);
         checkAbort(signal);
@@ -60,7 +68,12 @@ export class ConfigStore {
       });
     } catch (error) {
       if (error instanceof OperationError || (error instanceof Error && error.name === "AbortError")) throw error;
-      throw new OperationError("CONFIG_WRITE_FAILED", "无法保存配置，原文件未被替换。", undefined, true);
+      throw new OperationError(
+        "CONFIG_WRITE_FAILED",
+        "Could not save the configuration. The original file was not replaced.",
+        undefined,
+        true,
+      );
     }
   }
 }

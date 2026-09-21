@@ -171,7 +171,7 @@ export async function discoverModels(
   if ("error" in nativeResult)
     discoveryContext.getStore()?.warnings.push({
       code: nativeResult.error instanceof OperationError ? nativeResult.error.code : "NETWORK_ERROR",
-      message: "服务端模型列表获取失败，候选可能仅来自模型目录。",
+      message: "Could not fetch the server model list. Candidates may come only from the model catalog.",
     });
   if (models.length > 0) return models;
   if ("error" in nativeResult) throw nativeResult.error;
@@ -224,7 +224,10 @@ async function discoverNative(
   if (api === "google-vertex") return discoverVertex(bp, key);
   discoveryContext
     .getStore()
-    ?.warnings.push({ code: "DISCOVERY_UNSUPPORTED", message: "当前 API 没有已实现的模型发现接口，可手动添加模型。" });
+    ?.warnings.push({
+      code: "DISCOVERY_UNSUPPORTED",
+      message: "Model discovery is not implemented for this API. Add models manually.",
+    });
   return [];
 }
 
@@ -372,7 +375,10 @@ async function loadCatalog(): Promise<Record<string, ModelsDevProvider>> {
     checkAbort(discoveryContext.getStore()?.signal);
     discoveryContext
       .getStore()
-      ?.warnings.push({ code: "CATALOG_UNAVAILABLE", message: "远端模型目录暂不可用；使用服务端结果和 Pi 本地目录。" });
+      ?.warnings.push({
+        code: "CATALOG_UNAVAILABLE",
+        message: "The remote model catalog is unavailable. Using server results and the local Pi catalog.",
+      });
     return {};
   }
 }
@@ -702,7 +708,7 @@ async function get<T>(url: string, headers?: Record<string, string>): Promise<T 
   if (!r.ok)
     throw new OperationError(
       r.status === 401 || r.status === 403 ? "AUTH_FAILED" : "NETWORK_ERROR",
-      `模型服务返回 HTTP ${r.status}。`,
+      `The model service returned HTTP ${r.status}.`,
       undefined,
       r.status === 429 || r.status >= 500,
     );
@@ -723,8 +729,8 @@ async function fetchTimeout(url: string, init?: RequestInit, ms = TIMEOUT_MS): P
     });
   } catch {
     checkAbort(options?.signal);
-    if (timeout.aborted) throw new OperationError("TIMEOUT", "模型发现超时。", undefined, true);
-    throw new OperationError("NETWORK_ERROR", "无法访问模型服务。", undefined, true);
+    if (timeout.aborted) throw new OperationError("TIMEOUT", "Model discovery timed out.", undefined, true);
+    throw new OperationError("NETWORK_ERROR", "Could not reach the model service.", undefined, true);
   }
 }
 

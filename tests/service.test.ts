@@ -192,7 +192,7 @@ test("credentials and header values are absent from every public projection, des
           { providerId: p.id, expectedRevision: p.revision, value: "x" },
           "model_tool",
         ),
-      /用户/,
+      /user/,
     );
     let r = await f.run("provider.update", { providerId: p.id, expectedRevision: p.revision, set: { id: "new-id" } });
     assert.equal(r.data.auth.status, "configured");
