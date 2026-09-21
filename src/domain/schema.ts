@@ -64,42 +64,47 @@ const routing = object({
   sort: Type.Optional(enumOf(["price", "throughput", "latency"])),
   quantizations: Type.Optional(stringList),
 });
-export const compatSchema = object({
-  ...Object.fromEntries(bools.map((k) => [k, Type.Optional(Type.Boolean())])),
-  maxTokensField: Type.Optional(enumOf(["max_completion_tokens", "max_tokens"])),
-  thinkingFormat: Type.Optional(
-    enumOf([
-      "openai",
-      "openrouter",
-      "deepseek",
-      "together",
-      "zai",
-      "qwen",
-      "chat-template",
-      "qwen-chat-template",
-      "string-thinking",
-      "ant-ling",
-    ]),
-  ),
-  cacheControlFormat: Type.Optional(Type.Literal("anthropic")),
-  deferredToolsMode: Type.Optional(Type.Literal("kimi")),
-  sessionAffinityFormat: Type.Optional(enumOf(["openai", "openai-nosession", "openrouter"])),
-  chatTemplateKwargs: Type.Optional(
-    Type.Record(
-      text({ pattern: "^[a-zA-Z0-9_]+$" }),
-      Type.Union([
-        Type.Boolean(),
-        Type.Number(),
-        text({ maxLength: 256 }),
-        Type.Null(),
-        object({ $var: enumOf(["thinking.enabled", "thinking.effort"]) }),
+// Pi treats compat as an extensible object. Validate known fields, but preserve
+// provider-specific metadata instead of preventing the entire config from loading.
+export const compatSchema = object(
+  {
+    ...Object.fromEntries(bools.map((k) => [k, Type.Optional(Type.Boolean())])),
+    maxTokensField: Type.Optional(enumOf(["max_completion_tokens", "max_tokens"])),
+    thinkingFormat: Type.Optional(
+      enumOf([
+        "openai",
+        "openrouter",
+        "deepseek",
+        "together",
+        "zai",
+        "qwen",
+        "chat-template",
+        "qwen-chat-template",
+        "string-thinking",
+        "ant-ling",
       ]),
-      { maxProperties: 50 },
     ),
-  ),
-  openRouterRouting: Type.Optional(routing),
-  vercelGatewayRouting: Type.Optional(object({ only: Type.Optional(stringList), order: Type.Optional(stringList) })),
-});
+    cacheControlFormat: Type.Optional(Type.Literal("anthropic")),
+    deferredToolsMode: Type.Optional(Type.Literal("kimi")),
+    sessionAffinityFormat: Type.Optional(enumOf(["openai", "openai-nosession", "openrouter"])),
+    chatTemplateKwargs: Type.Optional(
+      Type.Record(
+        text({ pattern: "^[a-zA-Z0-9_]+$" }),
+        Type.Union([
+          Type.Boolean(),
+          Type.Number(),
+          text({ maxLength: 256 }),
+          Type.Null(),
+          object({ $var: enumOf(["thinking.enabled", "thinking.effort"]) }),
+        ]),
+        { maxProperties: 50 },
+      ),
+    ),
+    openRouterRouting: Type.Optional(routing),
+    vercelGatewayRouting: Type.Optional(object({ only: Type.Optional(stringList), order: Type.Optional(stringList) })),
+  },
+  { additionalProperties: true },
+);
 export const modelSchema = object({
   id: text({ minLength: 1, maxLength: 256, title: "模型 ID" }),
   name: Type.Optional(text({ title: "模型名称" })),

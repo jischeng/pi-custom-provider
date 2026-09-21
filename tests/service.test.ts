@@ -659,3 +659,19 @@ test("credential writes refuse empty or malformed auth storage", async () => {
     await f.dispose();
   }
 });
+
+test("invalid known compat fields identify the provider and field without exposing values", async () => {
+  const f = fixture();
+  try {
+    const bad = { ...values(), models: [{ id: "fixture", compat: { supportsStore: "PRIVATE_SENTINEL" } }] };
+    fs.writeFileSync(path.join(f.directory, "models.json"), JSON.stringify({ providers: { broken: bad } }));
+    const before = fs.readFileSync(f.service.store.file, "utf8");
+    const result = await f.run("provider.get", { providerId: "broken" });
+    assert.equal(result.error?.code, "VALIDATION_ERROR");
+    assert.match(result.error!.message, /\/providers\/broken\/models\/0\/compat\/supportsStore/);
+    assert(!JSON.stringify(result).includes("PRIVATE_SENTINEL"));
+    assert.equal(fs.readFileSync(f.service.store.file, "utf8"), before);
+  } finally {
+    await f.dispose();
+  }
+});

@@ -239,3 +239,43 @@ test("real Pi resolves newly saved credentials for HTTP without exposing keys or
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
+
+test("existing Pi compat metadata survives startup and provider edits", async () => {
+  const compat = { supportsAdditionalTools: true, supportsToolSearch: true, customCapability: { enabled: true } };
+  const config = {
+    providers: {
+      existing: {
+        api: "openai-responses",
+        baseUrl: "https://fixture.invalid/v1",
+        authMode: "none",
+        compat,
+        models: [{ id: "fixture", compat }],
+      },
+    },
+  };
+  const p = await rpc(true, [], config);
+  try {
+    const result = await p.invoke("provider-manager/provider.get", { providerId: "existing" });
+    assert.equal(result.status, "succeeded", JSON.stringify(result));
+    assert.deepEqual(result.data.compat, compat);
+    assert.deepEqual(result.data.models[0].compat, compat);
+    const models = await p.command("get_available_models");
+    const model = models.data.models.find((m: any) => m.provider === "existing" && m.id === "fixture");
+    assert(model, JSON.stringify(models));
+    assert.deepEqual(model.compat, compat);
+    const updated = await p.invoke("provider-manager/provider.update", {
+      providerId: "existing",
+      expectedRevision: result.data.revision,
+      set: { name: "Edited" },
+    });
+    assert.equal(updated.status, "succeeded", JSON.stringify(updated));
+    const saved = JSON.parse(fs.readFileSync(path.join(p.root, "agent/models.json"), "utf8"));
+    assert.deepEqual(saved.providers.existing.compat, compat);
+    assert.deepEqual(saved.providers.existing.models[0].compat, compat);
+    assert(
+      !p.events.some((e) => e.type === "extension_ui_request" && e.method === "notify" && e.notifyType === "error"),
+    );
+  } finally {
+    await p.close();
+  }
+});

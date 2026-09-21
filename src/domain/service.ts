@@ -104,9 +104,20 @@ export class ProviderService {
   }
   view(id: string, provider: ProviderConfig, configRevision: string) {
     const values = JSON.parse(JSON.stringify(this.publicConfig(id, provider)));
-    // Refuse unsafe/corrupt legacy data instead of returning private or unrecognized fields.
-    validate(providerSchema, values);
-    this.validateUrls(values);
+    try {
+      validate(providerSchema, values);
+      this.validateUrls(values);
+    } catch (error) {
+      if (!(error instanceof OperationError)) throw error;
+      const prefix = `/providers/${id.replace(/~/g, "~0").replace(/\//g, "~1")}`;
+      const fields = error.fields?.map((field) => ({ ...field, path: prefix + field.path }));
+      const locations =
+        fields
+          ?.slice(0, 3)
+          .map((field) => field.path)
+          .join("、") || prefix;
+      throw new OperationError(error.code, `${error.message} 位置：${locations}`, fields, error.retryable);
+    }
     return {
       ...values,
       revision: configRevision,

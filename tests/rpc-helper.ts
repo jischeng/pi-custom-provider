@@ -5,9 +5,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 export const repo = path.resolve(import.meta.dirname, "..");
-export async function rpc(bridge = true, extra: string[] = []) {
+export async function rpc(bridge = true, extra: string[] = [], initialConfig?: unknown) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "provider-rpc-"));
   for (const dir of ["home", "agent", "cwd"]) fs.mkdirSync(path.join(root, dir));
+  if (initialConfig !== undefined)
+    fs.writeFileSync(path.join(root, "agent/models.json"), JSON.stringify(initialConfig));
   const cli = bridge
     ? path.join(repo, "bin/pi-extension-rpc.mjs")
     : fileURLToPath(new URL("cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
