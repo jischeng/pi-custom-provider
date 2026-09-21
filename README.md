@@ -11,9 +11,11 @@ pnpm install --frozen-lockfile
 pnpm exec pi -e ./src/index.ts
 ```
 
-Run `/provider-setup`. The English UI uses Pi's native `SettingsList` for searchable provider settings and in-place model toggles, `ExtensionEditorComponent` for prefilled editing, and `BorderedLoader` for progress. `Container`, `Text`, and `Spacer` provide page headings and layout; keyboard input goes directly to the native list. `ctx.ui.custom` only mounts those existing components. There is no custom terminal renderer or key handler.
+Run `/provider-setup`. The English interface uses Pi's native `SettingsList`, `Container`, `Text`, `DynamicBorder`, editors and dialogs. Pi owns rendering, list navigation, search and the overlay stack; the extension only connects operations and switches focus between sections.
 
-Opening a provider shows its identity and model list immediately. Model IDs stay visible even when display names match; selecting a model opens its fields directly. The models page contains only models, `Add model…`, and `Provider actions…`. Discovery, selection, provider settings, credentials, save, discard and deletion live in that separate action menu. Only editable settings use a value column; navigation does not show metadata summaries. Create a provider, choose its API and authentication method, and add models. Save the provider before configuring credentials, then reopen it to discover models. Review model metadata or apply a complete Pi preset and explicitly save. Discarding a draft does not write configuration.
+Opening a provider keeps its models and grouped actions in one window. Model IDs distinguish matching display names. Tab switches between Models and Actions; selecting a model opens its editor over the provider window. Add model opens the complete model form (ID, name, API, context, output limits and other metadata). Confirming adds it to the unsaved provider draft; cancelling leaves no partial model. Closing a child dialog restores the provider window and its selection. Save changes explicitly writes the provider; discard does not write configuration.
+
+Provider settings, discovery, model selection, credentials, save, discard and deletion are direct actions in the provider window. There is no extra Provider actions menu and no navigation metadata value column. Save the provider before configuring credentials. Validation failures appear in a native dialog above the current window.
 
 The interface supports provider renaming, model selection with native search and scrolling, full model metadata including cost tiers, optional-field removal, compatibility settings, and write-only provider/model headers. Changes immediately synchronize with Pi. Switch the active model before renaming or deleting its provider or removing that model.
 

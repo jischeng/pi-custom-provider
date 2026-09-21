@@ -28,15 +28,30 @@ def act(keys,label):
  for key in keys:
   os.write(master,key.encode());time.sleep(.045)
  wait(label)
+ while select.select([master],[],[],.15)[0]:
+  data=os.read(master,262144)
+  if b'\x1b[6n' in data: os.write(master,b'\x1b[1;1R')
+  output+=data.decode('utf-8',errors='replace')
 def pick(index,label): act(['\x1b[B']*index+['\r'],label)
 def input(value,label): act([value,'\r'],label)
 def config():
  with open(root+'/agent/models.json') as f: return json.load(f)
 def choose(query,label): act(['\x15',query.replace(' ',''),'\r'],label)
 def edit(value,label): act(['\x01','\x0b',value,'\r'],label)
-def manage(query,label):
- choose('Provider actions','Discover models')
- choose(query,label)
+action_index=0
+in_actions=True
+def action(index,label):
+ global action_index,in_actions
+ keys=[] if in_actions else ['\t']
+ delta=index-action_index
+ keys+=['\x1b[B' if delta>=0 else '\x1b[A']*abs(delta)
+ keys+=['\r']
+ action_index=index;in_actions=True
+ act(keys,label)
+def open_provider(name,has_models=True):
+ global action_index,in_actions
+ choose(name,'switch section')
+ action_index=0;in_actions=not has_models
 try:
  wait('pi v')
  act(['/provider-setup','\r'],'Create provider')
@@ -44,23 +59,31 @@ try:
  pick(options['apiIndex'],'Base URL')
  input('http://127.0.0.1:18080/v1','Provider ID')
  input('pty-provider','Authentication method')
- pick(0,'Type to search')
- # Settings show existing values; search goes directly to the requested field/action.
- choose('Add model','Model ID')
- input('pty-model','Type to search')
- manage('Save changes','Save configuration')
+ pick(0,'No models added.')
+ # Add opens the complete model form; cancelling must leave no partial model.
+ action(0,'Model name')
+ choose('Model ID','external editor')
+ edit('cancelled-model','Type to search')
+ choose('Cancel','No models added.')
+ action(0,'Model name')
+ choose('Model ID','external editor')
+ edit('pty-model','Type to search')
+ choose('Model name','external editor')
+ edit('PTY model','Type to search')
+ choose('Context window','external editor')
+ edit('64000','Type to search')
+ choose('Add model','Actions')
+ action(4,'Save configuration')
  pick(0,'Create provider')
- assert config()['providers']['pty-provider']['models'][0]['id']=='pty-model'
- choose('pty-provider','pty-model')
- wait('Provider actions')
+ assert config()['providers']['pty-provider']['models']==[{'id':'pty-model','name':'PTY model','contextWindow':64000}]
+ open_provider('pty-provider')
+ # Models and actions are visible together. No Provider actions submenu exists.
  page=ansi.sub('',output)
- assert 'Provider: pty-provider' in page and 'Models' in page
- assert 'Provider settings' not in page and 'Save changes' not in page
- assert 'Provider ID' not in page.rsplit('Provider: pty-provider',1)[-1]
- pick(0,'Context window')
+ assert 'Provider: pty-provider' in page and 'Models' in page and 'Actions' in page
+ assert 'Provider actions' not in page
+ choose('pty-model','Context window')
  choose('Context window','external editor')
  edit('96000','Type to search')
- # Reopening the same editor must show the updated value rather than its initial value.
  choose('Context window','external editor')
  wait('96000')
  act(['\x03'],'Type to search')
@@ -68,48 +91,47 @@ try:
  choose('Compatibility settings','Apply Compatibility settings')
  choose('Advanced JSON','external editor')
  edit('invalid-json','Invalid JSON')
+ pick(0,'Advanced JSON')
  act(['\x03'],'Compatibility settings')
- choose('Back to provider','Type to search')
- manage('Save changes','Save configuration')
+ choose('Back to provider','Actions')
+ action(6,'Save configuration')
  pick(0,'Create provider')
  model=config()['providers']['pty-provider']['models'][0]
  assert model['contextWindow']==96000 and model['reasoning'] is True
- # Rename with native settings/editor, then save.
- choose('pty-provider','Type to search')
- manage('Provider settings','Provider ID')
+ open_provider('pty-provider')
+ action(3,'Provider ID')
  choose('Provider ID','external editor')
  edit('pty-renamed','Type to search')
- choose('Back to models','Type to search')
- manage('Save changes','Save configuration')
+ choose('Back to models','Actions')
+ action(6,'Save configuration')
  pick(0,'Create provider')
  assert 'pty-provider' not in config()['providers']
  assert 'pty-renamed' in config()['providers']
  before=config()
- choose('pty-renamed','Type to search')
- manage('Provider settings','Provider ID')
+ open_provider('pty-renamed')
+ action(3,'Provider ID')
  choose('Display name','external editor')
  edit('discard-me','Type to search')
- choose('Back to models','Type to search')
- manage('Discard changes','Create provider')
+ choose('Back to models','Actions')
+ action(7,'Create provider')
  assert config()==before
- # Searchable native model selection toggles in place and remains unsaved until explicit save.
- choose('pty-renamed','Type to search')
- manage('Select models','Apply selection')
+ open_provider('pty-renamed')
+ action(2,'Apply selection')
  choose('pty-model','No')
- choose('Apply selection','Type to search')
- manage('Save changes','Save configuration')
+ choose('Apply selection','No models added.')
+ action(6,'Save configuration')
  pick(0,'Create provider')
  assert config()['providers']['pty-renamed']['models']==[]
- choose('pty-renamed','Type to search')
- manage('Delete provider','Existing credentials will be retained')
- pick(1,'Type to search')
- manage('Discard changes','Create provider')
+ open_provider('pty-renamed',False)
+ action(8,'Existing credentials will be retained')
+ pick(1,'No models added.')
+ action(7,'Create provider')
  assert 'pty-renamed' in config()['providers']
- choose('pty-renamed','Type to search')
- manage('Delete provider','Existing credentials will be retained')
+ open_provider('pty-renamed',False)
+ action(8,'Existing credentials will be retained')
  pick(0,'Create provider')
  assert config()['providers']=={}
- print('Native Pi PTY: searchable settings, prefilled editor, inline toggles, model selection, save, rename, discard and deletion passed')
+ print('Native Pi PTY: grouped provider window, nested model dialogs, complete creation, cancellation, edit, save, rename, discard and deletion passed')
 
 finally:
  process.terminate()

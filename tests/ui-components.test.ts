@@ -110,3 +110,71 @@ test("the local operation adapter uses Pi's cancellable loader without a UI-spec
   component.handleInput("\x1b");
   assert.equal((await result).status, "cancelled");
 });
+
+test("grouped native provider controls fit short terminals and route mouse/Tab focus", async () => {
+  const { providerPanel } = await import("../src/ui/provider-panel");
+  const { stripTerminalSequences } = await import("@earendil-works/pi-tui");
+  for (const rows of [24, 30, 65]) {
+    let panel: any;
+    let selected: string | undefined;
+    const abort = new AbortController();
+    const ctx: any = {
+      ui: {
+        custom(factory: any) {
+          return new Promise<void>((done) => {
+            panel = factory(
+              { terminal: { rows }, requestRender() {} },
+              { fg: (_role: string, text: string) => text, bold: (text: string) => text },
+              {},
+              done,
+            );
+          });
+        },
+      },
+    };
+    const task = providerPanel(
+      ctx,
+      () => ({
+        title: "Provider: fixture",
+        models: Array.from({ length: 20 }, (_, i) => ({ id: `m${i}`, label: `Model ${i}` })),
+        actions: Array.from({ length: 9 }, (_, i) => ({ id: `a${i}`, label: `Action ${i}` })),
+      }),
+      async (id) => {
+        selected = id;
+        return false;
+      },
+      abort.signal,
+    );
+    try {
+      const lines = panel.render(80).map(stripTerminalSequences);
+      assert(lines.length <= rows - 2, `Dialog exceeds ${rows} terminal rows: ${lines.length}`);
+      const result = panel.handleMouse({
+        type: "press",
+        button: "left",
+        x: 3,
+        y: lines.findIndex((line: string) => line.includes("Action 0")),
+        screenX: 3,
+        screenY: 1,
+        width: 80,
+        height: lines.length,
+        shift: false,
+        alt: false,
+        ctrl: false,
+      });
+      assert.equal(result.focusTarget, panel);
+      const cursors = panel
+        .render(80)
+        .map(stripTerminalSequences)
+        .filter((line: string) => line.includes("→"));
+      assert.equal(cursors.length, 1);
+      assert.match(cursors[0], /Action 0/);
+      panel.handleInput("\t");
+      panel.handleInput("\r");
+      await task;
+      assert.equal(selected, "m0");
+    } finally {
+      abort.abort();
+      await task;
+    }
+  }
+});

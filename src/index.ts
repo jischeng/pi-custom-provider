@@ -7,6 +7,7 @@ import { registrationChannel } from "./operations/types";
 import { failure } from "./operations/errors";
 import { runSetup } from "./ui";
 import { createUiOperations } from "./ui/operations";
+import { dialogContext } from "./ui/dialogs";
 import { registerManagementTools } from "./tools";
 
 export default function (pi: ExtensionAPI) {
@@ -64,7 +65,8 @@ export default function (pi: ExtensionAPI) {
       }
       controller = new AbortController();
       try {
-        await runSetup(createUiOperations(service.definitions(), ctx), ctx, controller.signal);
+        const dialogs = dialogContext(ctx);
+        await runSetup(createUiOperations(service.definitions(), dialogs), dialogs, controller.signal);
       } finally {
         controller = undefined;
       }

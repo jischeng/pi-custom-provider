@@ -3,14 +3,15 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Container, SettingsList, Text, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { Container, SettingsList, stripTerminalSequences, visibleWidth, getKeybindings } from "@earendil-works/pi-tui";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { ProviderService } from "../src/domain/service";
 import { OperationRegistry } from "../src/operations/registry";
 import { runSetup } from "../src/ui";
+import { dialogContext } from "../src/ui/dialogs";
 
 initTheme("dark");
-test("provider navigation identifies same-name models and separates management from models", async () => {
+test("native dialogs keep the provider open, restore focus, and add complete models without partial writes", async () => {
   const directory = mkdtempSync(join(tmpdir(), "provider-ui-"));
   const service = new ProviderService({
     directory,
@@ -22,45 +23,56 @@ test("provider navigation identifies same-name models and separates management f
   registry.register("provider-manager", definitions);
   const invoke = (name: string, args: unknown, signal?: AbortSignal) =>
     registry.invoke(`provider-manager/${name}`, args, "user_client", undefined, signal).done;
-  const steps = [
-    (page: string) => {
-      assert.match(page, /Providers/);
-      return "360\r";
+  const stack: any[] = [];
+  const tui: any = { terminal: { rows: 40, columns: 90 }, requestRender() {} };
+  const theme = {
+    bg: (_role: string, text: string) => text,
+    fg: (_role: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  const keys = getKeybindings();
+  const ctx = dialogContext({
+    ui: {
+      notify(message: string) {
+        assert.equal(message, "Configuration saved.");
+      },
+      custom(factory: any, options: any) {
+        assert.equal(options.overlay, true);
+        return new Promise((resolve, reject) => {
+          try {
+            const component = factory(tui, theme, keys, (value: any) => {
+              stack.splice(stack.indexOf(component), 1);
+              component.dispose?.();
+              resolve(value);
+            });
+            stack.push(component);
+          } catch (error) {
+            reject(error);
+          }
+        });
+      },
     },
-    (page: string) => {
-      assert.match(page, /Provider: 360 *\n\n Models/);
-      assert.match(page, /m-one \(Same display name\)/);
-      assert.match(page, /m-two \(Same display name\)/);
-      assert.doesNotMatch(
-        page,
-        /1000000|candidates|selected|configured|Save changes|Delete provider|Provider settings/,
-      );
-      return "m-two\r";
-    },
-    (page: string) => {
-      assert.match(page, /Provider: 360 *\n\n Model: m-two/);
-      return "\x1b";
-    },
-    (page: string) => {
-      assert.match(page, /m-one/);
-      return "Provider actions\r";
-    },
-    (page: string) => {
-      assert.match(page, /Provider: 360 *\n\n Provider actions/);
-      assert.match(page, /Save changes/);
-      assert.doesNotMatch(page, /m-one|m-two|1000000|configured|candidates/);
-      return "\x1b";
-    },
-    (page: string) => {
-      assert.match(page, /Provider: 360 *\n\n Models/);
-      return "\x1b";
-    },
-    (page: string) => {
-      assert.match(page, /Providers/);
-      return "\x1b";
-    },
-  ];
-  let screen = 0;
+  } as any);
+  const page = (component = stack.at(-1)) => stripTerminalSequences(component.render(80).join("\n"));
+  const until = async (condition: () => boolean) => {
+    for (let i = 0; i < 300; i++) {
+      if (condition()) return;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.fail(`Dialog did not reach expected state: ${stack.length}\n${stack.length ? page() : "closed"}`);
+  };
+  const press = async (...input: string[]) => {
+    for (const key of input) stack.at(-1).handleInput(key);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+  const choose = async (query: string) => press("\x15", ...query.replaceAll(" ", ""), "\r");
+  const edit = async (label: string, value: string) => {
+    await choose(label);
+    assert.match(page(), /external\s+editor/);
+    await press("\x01", "\x0b", ...value, "\r");
+  };
+  const controller = new AbortController();
+  let task: Promise<void> | undefined;
   try {
     assert.equal(
       (
@@ -74,39 +86,84 @@ test("provider navigation identifies same-name models and separates management f
       ).status,
       "succeeded",
     );
-    const ctx: any = {
-      ui: {
-        notify(message: string) {
-          assert.fail(message);
-        },
-        custom(factory: any) {
-          return new Promise<void>((done, reject) => {
-            try {
-              const panel = factory(
-                { requestRender() {} },
-                { fg: (_role: string, text: string) => text, bold: (text: string) => text },
-                {},
-                done,
-              );
-              assert(panel instanceof Container);
-              assert(panel.children[0] instanceof Text);
-              assert(panel.children.at(-1) instanceof SettingsList);
-              const lines = panel.render(72);
-              assert(lines.every((line: string) => visibleWidth(line) <= 72));
-              const keys = steps[screen++](stripTerminalSequences(lines.join("\n")));
-              // All input, including search and cancellation, runs through the native child.
-              for (const key of keys) (panel as any).handleInput(key);
-            } catch (error) {
-              reject(error);
-            }
-          });
-        },
-      },
-    };
-    await runSetup({ describe: (name) => definitions.find((item) => item.name === name)!, invoke }, ctx);
-    assert.equal(screen, steps.length);
+    task = runSetup(
+      { describe: (name) => definitions.find((item) => item.name === name)!, invoke },
+      ctx,
+      controller.signal,
+    );
+    await until(() => stack.length === 1);
+    await choose("360");
+    await until(() => stack.length === 1 && page().includes("Actions"));
+    const parent = stack[0];
+    assert(parent instanceof Container);
+    assert.equal(parent.children.filter((child: any) => child instanceof SettingsList).length, 2);
+    assert.match(page(), /m-one \(Same display name\)/);
+    assert.match(page(), /m-two \(Same display name\)/);
+    assert.match(page(), /Save changes/);
+    assert.match(page(), /Delete provider/);
+    assert.doesNotMatch(page(), /Provider actions|1000000|candidates|configured/);
+    assert(parent.render(80).every((line: string) => visibleWidth(line) <= 80));
+    assert(parent.render(80).length <= tui.terminal.rows - 2);
+
+    await choose("m-two");
+    await until(() => stack.length === 2);
+    assert.equal(stack[0], parent);
+    assert.match(page(), /Model: m-two/);
+    await press("\x1b");
+    await until(() => stack.length === 1);
+    assert.equal(stack[0], parent);
+    assert.match(page(), /> m-two/); // Native search and selection survive closing the child.
+
+    await press("\t", "\r");
+    await until(() => stack.length === 2);
+    for (const label of ["Add model", "Model ID", "Model name", "Context window", "Maximum output tokens"])
+      assert(page().includes(label));
+    await edit("Model ID", "cancelled-model");
+    await choose("Cancel");
+    await until(() => stack.length === 1);
+    assert.doesNotMatch(page(parent), /cancelled-model/);
+
+    await press("\r");
+    await until(() => stack.length === 2);
+    await choose("Add model");
+    await until(() => stack.length === 2 && page().includes("validation"));
+    assert.match(page(), /\/model\/id/);
+    await press("\r");
+    await until(() => stack.length === 2 && page().includes("Model name"));
+    await edit("Model ID", "new-model");
+    await edit("Model name", "Full model");
+    await edit("Context window", "64000");
+    await edit("Maximum output tokens", "4096");
+    await choose("Add model");
+    await until(() => stack.length === 1 && page().includes("new-model"));
     assert.equal((await invoke("provider.get", { providerId: "360" })).data.models.length, 2);
+
+    // Adding a duplicate must not upsert over the existing model.
+    await press("\r");
+    await until(() => stack.length === 2);
+    await edit("Model ID", "new-model");
+    await choose("Add model");
+    await until(() => page().includes("already exists"));
+    await press("\r");
+    await until(() => page().includes("Model name"));
+    await choose("Cancel");
+    await until(() => stack.length === 1);
+
+    await press(...Array(6).fill("\x1b[B"), "\r");
+    await until(() => stack.length === 2 && page().includes("Save configuration"));
+    await press("\r");
+    await until(() => stack.length === 1 && page().includes("Create provider"));
+    const models = (await invoke("provider.get", { providerId: "360" })).data.models;
+    assert.deepEqual(
+      models.find((model: any) => model.id === "new-model"),
+      { id: "new-model", name: "Full model", contextWindow: 64000, maxTokens: 4096 },
+    );
+    assert(!models.some((model: any) => model.id === "cancelled-model"));
+    await press("\x1b");
+    await task;
   } finally {
+    controller.abort();
+    await task;
     await registry.dispose();
     rmSync(directory, { recursive: true, force: true });
   }

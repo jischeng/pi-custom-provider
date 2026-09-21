@@ -1,6 +1,12 @@
-import { ExtensionEditorComponent, getSettingsListTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  DynamicBorder,
+  ExtensionEditorComponent,
+  getSettingsListTheme,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import {
   Container,
+  Box,
   Spacer,
   Text,
   SettingsList,
@@ -212,6 +218,11 @@ export async function settingsPanel(
       void queue.finally(() => done());
     };
     const abort = () => finish();
+    const report = (message: string) => {
+      queue = queue.then(async () => {
+        await ctx.ui.select(message, ["Back"], { signal });
+      });
+    };
     const edit = (id: string, value: any) => {
       if (closed) return;
       queue = queue
@@ -222,19 +233,13 @@ export async function settingsPanel(
           list.updateValue(id, displayValue(actual));
           tui.requestRender();
         })
-        .catch(() => ctx.ui.notify("Could not update the field.", "error"));
+        .catch(async () => {
+          await ctx.ui.select("Could not update the field.", ["Back"], { signal });
+        });
     };
     const list = new SettingsList(
       [
-        ...fields.map((field) =>
-          nativeField(
-            field,
-            tui,
-            keys,
-            (value) => edit(field.id, value),
-            (message) => ctx.ui.notify(message, "error"),
-          ),
-        ),
+        ...fields.map((field) => nativeField(field, tui, keys, (value) => edit(field.id, value), report)),
         ...actions.map((action) => ({
           id: action.id,
           label: action.label,
@@ -257,6 +262,7 @@ export async function settingsPanel(
     if (signal?.aborted) queueMicrotask(abort);
     if (!heading) return list;
     const panel = new Container();
+    panel.addChild(new DynamicBorder());
     if (heading.context) {
       panel.addChild(new Text(theme.fg("accent", theme.bold(heading.context)), 1, 0));
       panel.addChild(new Spacer(1));
@@ -265,8 +271,11 @@ export async function settingsPanel(
     if (heading.description) panel.addChild(new Text(heading.description, 1, 0));
     panel.addChild(new Spacer(1));
     panel.addChild(list);
+    panel.addChild(new DynamicBorder());
+    const dialog = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+    dialog.addChild(panel);
     // Forward unchanged input to Pi; the stock container owns layout and mouse dispatch.
-    return Object.assign(panel, { handleInput: list.handleInput.bind(list) });
+    return Object.assign(dialog, { handleInput: list.handleInput.bind(list) });
   });
   await queue;
   return chosen;
