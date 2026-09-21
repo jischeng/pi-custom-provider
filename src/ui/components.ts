@@ -272,7 +272,7 @@ export async function settingsPanel(
     panel.addChild(new Spacer(1));
     panel.addChild(list);
     panel.addChild(new DynamicBorder());
-    const dialog = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+    const dialog = new Box(1, 1);
     dialog.addChild(panel);
     // Forward unchanged input to Pi; the stock container owns layout and mouse dispatch.
     return Object.assign(dialog, { handleInput: list.handleInput.bind(list) });
