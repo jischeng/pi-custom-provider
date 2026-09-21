@@ -111,7 +111,7 @@ test("the local operation adapter uses Pi's cancellable loader without a UI-spec
   assert.equal((await result).status, "cancelled");
 });
 
-test("grouped native provider controls fit short terminals and route mouse/Tab focus", async () => {
+test("grouped native provider controls fit short terminals and navigate continuously across sections with arrows and mouse", async () => {
   const { providerPanel } = await import("../src/ui/provider-panel");
   const { stripTerminalSequences } = await import("@earendil-works/pi-tui");
   for (const rows of [24, 30, 65]) {
@@ -168,10 +168,26 @@ test("grouped native provider controls fit short terminals and route mouse/Tab f
         .filter((line: string) => line.includes("→"));
       assert.equal(cursors.length, 1);
       assert.match(cursors[0], /Action 0/);
-      panel.handleInput("\t");
+      // Up from the first action reaches the last model, then Down returns to the action.
+      panel.handleInput("\x1b[A");
+      assert.match(
+        panel
+          .render(80)
+          .map(stripTerminalSequences)
+          .find((line: string) => line.includes("→")),
+        /Model 19/,
+      );
+      panel.handleInput("\x1b[B");
+      assert.match(
+        panel
+          .render(80)
+          .map(stripTerminalSequences)
+          .find((line: string) => line.includes("→")),
+        /Action 0/,
+      );
       panel.handleInput("\r");
       await task;
-      assert.equal(selected, "m0");
+      assert.equal(selected, "a0");
     } finally {
       abort.abort();
       await task;

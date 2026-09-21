@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Container, SettingsList, stripTerminalSequences, visibleWidth, getKeybindings } from "@earendil-works/pi-tui";
+import { Container, SelectList, stripTerminalSequences, visibleWidth, getKeybindings } from "@earendil-works/pi-tui";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { ProviderService } from "../src/domain/service";
 import { OperationRegistry } from "../src/operations/registry";
@@ -96,7 +96,7 @@ test("native dialogs keep the provider open, restore focus, and add complete mod
     await until(() => stack.length === 1 && page().includes("Actions"));
     const parent = stack[0];
     assert(parent instanceof Container);
-    assert.equal(parent.children.filter((child: any) => child instanceof SettingsList).length, 2);
+    assert.equal(parent.children.filter((child: any) => child instanceof SelectList).length, 2);
     assert.match(page(), /m-one \(Same display name\)/);
     assert.match(page(), /m-two \(Same display name\)/);
     assert.match(page(), /Save changes/);
@@ -114,7 +114,7 @@ test("native dialogs keep the provider open, restore focus, and add complete mod
     assert.equal(stack[0], parent);
     assert.match(page(), /> m-two/); // Native search and selection survive closing the child.
 
-    await press("\t", "\r");
+    await choose("Add model");
     await until(() => stack.length === 2);
     for (const label of ["Add model", "Model ID", "Model name", "Context window", "Maximum output tokens"])
       assert(page().includes(label));
@@ -123,7 +123,7 @@ test("native dialogs keep the provider open, restore focus, and add complete mod
     await until(() => stack.length === 1);
     assert.doesNotMatch(page(parent), /cancelled-model/);
 
-    await press("\r");
+    await choose("Add model");
     await until(() => stack.length === 2);
     await choose("Add model");
     await until(() => stack.length === 2 && page().includes("validation"));
@@ -135,11 +135,13 @@ test("native dialogs keep the provider open, restore focus, and add complete mod
     await edit("Context window", "64000");
     await edit("Maximum output tokens", "4096");
     await choose("Add model");
-    await until(() => stack.length === 1 && page().includes("new-model"));
+    await until(() => stack.length === 1);
+    await press("\x15");
+    assert.match(page(), /new-model/);
     assert.equal((await invoke("provider.get", { providerId: "360" })).data.models.length, 2);
 
     // Adding a duplicate must not upsert over the existing model.
-    await press("\r");
+    await choose("Add model");
     await until(() => stack.length === 2);
     await edit("Model ID", "new-model");
     await choose("Add model");
@@ -149,7 +151,7 @@ test("native dialogs keep the provider open, restore focus, and add complete mod
     await choose("Cancel");
     await until(() => stack.length === 1);
 
-    await press(...Array(6).fill("\x1b[B"), "\r");
+    await choose("Save changes");
     await until(() => stack.length === 2 && page().includes("Save configuration"));
     await press("\r");
     await until(() => stack.length === 1 && page().includes("Create provider"));

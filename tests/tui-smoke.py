@@ -38,20 +38,17 @@ def config():
  with open(root+'/agent/models.json') as f: return json.load(f)
 def choose(query,label): act(['\x15',query.replace(' ',''),'\r'],label)
 def edit(value,label): act(['\x01','\x0b',value,'\r'],label)
-action_index=0
-in_actions=True
+new_provider=True
 def action(index,label):
- global action_index,in_actions
- keys=[] if in_actions else ['\t']
- delta=index-action_index
- keys+=['\x1b[B' if delta>=0 else '\x1b[A']*abs(delta)
- keys+=['\r']
- action_index=index;in_actions=True
- act(keys,label)
+ items=['Add model','Discover models','Select models','Provider settings']
+ if not new_provider: items+=['Credentials','Request headers']
+ items+=['Save changes','Discard changes']
+ if not new_provider: items+=['Delete provider']
+ choose(items[index],label)
 def open_provider(name,has_models=True):
- global action_index,in_actions
- choose(name,'switch section')
- action_index=0;in_actions=not has_models
+ global new_provider
+ choose(name,'navigate')
+ new_provider=False
 try:
  wait('pi v')
  act(['/provider-setup','\r'],'Create provider')
@@ -81,7 +78,11 @@ try:
  page=ansi.sub('',output)
  assert 'Provider: pty-provider' in page and 'Models' in page and 'Actions' in page
  assert 'Provider actions' not in page
- choose('pty-model','Context window')
+ # Down crosses directly from the only model into Add model, without Tab.
+ act(['\x1b[B','\r'],'Model name')
+ choose('Cancel','Actions')
+ # Up crosses directly back from Add model to the existing model.
+ act(['\x1b[A','\r'],'Model: pty-model')
  choose('Context window','external editor')
  edit('96000','Type to search')
  choose('Context window','external editor')

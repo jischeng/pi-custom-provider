@@ -11,9 +11,9 @@ pnpm install --frozen-lockfile
 pnpm exec pi -e ./src/index.ts
 ```
 
-Run `/provider-setup`. The English interface uses Pi's native `SettingsList`, `Container`, `Text`, `DynamicBorder`, editors and dialogs. Pi owns rendering, list navigation, search and the overlay stack; the extension only connects operations and switches focus between sections.
+Run `/provider-setup`. The English interface uses Pi's native `SelectList`, `Input`, `SettingsList`, `Container`, `Text`, `DynamicBorder`, editors and dialogs. Pi owns rendering, list navigation, search and the overlay stack; the extension only connects operations and switches focus between sections.
 
-Opening a provider keeps its models and grouped actions in one window. Model IDs distinguish matching display names. Tab switches between Models and Actions; selecting a model opens its editor over the provider window. Add model opens the complete model form (ID, name, API, context, output limits and other metadata). Confirming adds it to the unsaved provider draft; cancelling leaves no partial model. Closing a child dialog restores the provider window and its selection. Save changes explicitly writes the provider; discard does not write configuration.
+Opening a provider keeps its models and grouped actions in one window. Model IDs distinguish matching display names. Up/Down moves continuously through models and actions without switching sections. Typing searches both groups; Enter opens the selected item. Add model opens the complete model form (ID, name, API, context, output limits and other metadata). Confirming adds it to the unsaved provider draft; cancelling leaves no partial model. Closing a child dialog restores the provider window and its selection. Save changes explicitly writes the provider; discard does not write configuration.
 
 Provider settings, discovery, model selection, credentials, save, discard and deletion are direct actions in the provider window. There is no extra Provider actions menu and no navigation metadata value column. Save the provider before configuring credentials. Validation failures appear in a native dialog above the current window.
 
