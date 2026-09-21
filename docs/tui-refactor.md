@@ -2,7 +2,7 @@
 
 ## Thesis
 
-Keep an identified provider window visible while native model and provider dialogs open above it. Provider and model operations belong to the domain; TUI, RPC, and agent tools are adapters over that contract. UI labels and errors are English.
+Keep the provider window and its selection state while native child dialogs are open. Temporarily hide the parent through Pi’s overlay handle so clipped parent labels cannot surround a child. Provider and model operations belong to the domain; TUI, RPC, and agent tools are adapters over that contract. UI labels and errors are English.
 
 ## Confidence
 
@@ -69,7 +69,9 @@ This direction fails if a business operation needs a TUI session, the settings s
 
 The flat provider page mixed model entities with management commands and arbitrary metadata summaries. Moving the commands into a Provider actions submenu then added navigation without fixing the underlying interaction. Add model also only asked for an ID and returned immediately, leaving users to reopen a partially configured model.
 
-The provider now stays open with separate Models and Actions sections composed from native controls. Up/Down moves continuously through both groups, and typing searches models and actions together. No section-switch key is needed. Native child dialogs open over the provider window; closing an unchanged dialog preserves the actual parent component, search and selection. Adding a model opens all model fields and only updates the provider draft on confirmation. Cancellation writes nothing, duplicate IDs cannot overwrite an existing model through Add, and schema failures open a visible native error dialog.
+The provider shows its saved models directly. Add model is the only model-addition entry: it discovers provider models and immediately opens the searchable selection list. This restores the flow in `e8329fa` (`Add Model` → `discover_edit` → `select_models`); separate Discover models and Select models commands were an unintended change during the native-component refactor. Manual model entry is a secondary action inside that list. Cancelling discovery returns to the provider; a failed discovery keeps known candidates and manual entry available. Confirmed manual creation returns to the list with the new model selected. Toggling a model updates the provider draft immediately; there is no separate Apply selection step.
+
+Up/Down moves continuously through Models and Actions, and typing searches both groups. Native child dialogs use Pi’s overlay handles to hide the parent temporarily and restore it on close. The actual parent component, search and selection survive. Manual entry uses the complete native model form: cancelling it writes nothing, duplicate IDs cannot overwrite an existing model, and schema failures open a native error dialog. Draft commits and RPC operations keep their existing contracts.
 
 The view is refreshed from operation results only when its items change. Existing business operations, validation and RPC contracts remain shared and unchanged. There is no custom terminal renderer or key parser: keyboard glue passes Up/Down across section boundaries and delegates list selection, text editing and matching to Pi. Mouse coordinates and overlay focus restoration come from Pi as well.
 

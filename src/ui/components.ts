@@ -285,30 +285,52 @@ export async function selectModels(
   ctx: ExtensionContext,
   candidates: any[],
   ids: string[],
+  updateSelection: (ids: string[]) => Promise<string[] | undefined>,
+  addManually: () => Promise<{ id: string; name?: string } | undefined>,
   signal?: AbortSignal,
   context?: string,
 ) {
   const selected = new Set(ids);
-  const fields = candidates.map((item) => ({
-    id: `model:${item.model.id}`,
-    label: item.model.id,
-    description: `${item.model.name || item.model.id}\nModel ID: ${item.model.id}`,
-    schema: { type: "boolean" },
-    allowDefault: false,
-    value: selected.has(item.model.id),
-  }));
-  const action = await settingsPanel(
-    ctx,
-    fields,
-    [{ id: "$apply", label: "Apply selection", description: "Apply the selected models to this draft." }],
-    async (id, value) => {
-      const modelId = id.slice("model:".length);
-      if (value === true) selected.add(modelId);
-      else selected.delete(modelId);
-      return selected.has(modelId);
-    },
-    signal,
-    { context, title: "Select models" },
-  );
-  return action === "$apply" ? [...selected] : undefined;
+  const models = candidates.map((item) => item.model);
+  while (!signal?.aborted) {
+    const fields = models.map((model) => ({
+      id: `model:${model.id}`,
+      label: model.id,
+      description: `${model.name || model.id}\nModel ID: ${model.id}`,
+      schema: { type: "boolean" },
+      allowDefault: false,
+      value: selected.has(model.id),
+    }));
+    const action = await settingsPanel(
+      ctx,
+      fields,
+      [
+        { id: "$manual", label: "Enter model manually" },
+        { id: "$back", label: "Back to models" },
+      ],
+      async (id, value) => {
+        const modelId = id.slice("model:".length);
+        const next = new Set(selected);
+        if (value === true) next.add(modelId);
+        else next.delete(modelId);
+        const saved = await updateSelection([...next]);
+        if (saved) {
+          selected.clear();
+          for (const id of saved) selected.add(id);
+        }
+        return selected.has(modelId);
+      },
+      signal,
+      { context, title: "Add model" },
+    );
+    if (action === "$manual") {
+      const model = await addManually();
+      if (model) {
+        if (!models.some((item) => item.id === model.id)) models.push(model);
+        selected.add(model.id);
+      }
+      continue;
+    }
+    return;
+  }
 }

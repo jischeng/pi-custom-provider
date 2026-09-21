@@ -3,16 +3,31 @@ import {
   ExtensionSelectorComponent,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 
 /** Use Pi's own dialogs and overlay focus stack, including nested authentication prompts. */
 export function dialogContext(ctx: ExtensionContext): ExtensionContext {
-  const custom: ExtensionContext["ui"]["custom"] = (factory, options) =>
-    ctx.ui.custom(factory, {
-      overlay: true,
-      overlayOptions: { width: "85%", margin: 1 },
-      ...options,
-    });
+  const overlays: OverlayHandle[] = [];
+  const custom: ExtensionContext["ui"]["custom"] = async (factory, options) => {
+    const parent = overlays.at(-1);
+    let handle: OverlayHandle | undefined;
+    parent?.setHidden(true);
+    try {
+      return await ctx.ui.custom(factory, {
+        overlay: true,
+        overlayOptions: { width: "85%", margin: 1 },
+        ...options,
+        onHandle(next) {
+          handle = next;
+          overlays.push(next);
+          options?.onHandle?.(next);
+        },
+      });
+    } finally {
+      if (handle) overlays.splice(overlays.indexOf(handle), 1);
+      parent?.setHidden(false);
+    }
+  };
   const prompt = <T>(
     build: (tui: TUI, done: (value: T | undefined) => void) => Component & { dispose?(): void },
     signal?: AbortSignal,

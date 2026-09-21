@@ -106,8 +106,6 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
           })),
           actions: [
             { id: "$add", label: "Add model" },
-            { id: "$discover", label: "Discover models" },
-            { id: "$models", label: "Select models" },
             { id: "$settings", label: "Provider settings" },
             ...(stored
               ? [
@@ -163,43 +161,55 @@ export async function runSetup(operations: ProviderOperations, ctx: ExtensionCon
             if (!stored) return false;
             await call("draft.discard", ref());
             draft = await call("draft.open", { providerId: stored.id });
-          } else if (action === "$discover") {
-            const next = await call("model.discover", ref());
-            if (next) draft = next;
-          } else if (action === "$models") {
-            const ids = await selectModels(ctx, draft.candidates, draft.selectedModelIds, signal, providerContext);
-            if (ids) draft = (await call("draft.selectModels", { ...ref(), modelIds: ids })) || draft;
           } else if (action === "$add") {
-            const model: Record<string, any> = { id: "" };
-            while (!signal?.aborted) {
-              const choice = await settingsPanel(
-                ctx,
-                fields(modelSchema, model),
-                [
-                  { id: "$add", label: "Add model" },
-                  { id: "$cancel", label: "Cancel" },
-                ],
-                async (id, value) => {
-                  if (value === cleared) delete model[id];
-                  else model[id] = value;
-                  return model[id];
-                },
-                signal,
-                { context: providerContext, title: "Add model" },
-              );
-              if (choice !== "$add") break;
-              if (draft.values.models.some((item: any) => item.id === model.id)) {
-                await ctx.ui.select("This model ID already exists. Open the existing model to edit it.", ["Back"], {
+            const result = await execute("model.discover", ref());
+            if (result.status === "cancelled") return true;
+            if (result.status === "succeeded") draft = result.data;
+            const addManually = async () => {
+              const model: Record<string, any> = { id: "" };
+              while (!signal?.aborted) {
+                const choice = await settingsPanel(
+                  ctx,
+                  fields(modelSchema, model),
+                  [
+                    { id: "$add", label: "Add model" },
+                    { id: "$cancel", label: "Cancel" },
+                  ],
+                  async (id, value) => {
+                    if (value === cleared) delete model[id];
+                    else model[id] = value;
+                    return model[id];
+                  },
                   signal,
-                });
-                continue;
+                  { context: providerContext, title: "Add model" },
+                );
+                if (choice !== "$add") break;
+                if (draft.values.models.some((item: any) => item.id === model.id)) {
+                  await ctx.ui.select("This model ID already exists. Open the existing model to edit it.", ["Back"], {
+                    signal,
+                  });
+                  continue;
+                }
+                const next = await call("draft.upsertModel", { ...ref(), model });
+                if (next) {
+                  draft = next;
+                  return draft.values.models.find((item: any) => item.id === model.id);
+                }
               }
-              const next = await call("draft.upsertModel", { ...ref(), model });
-              if (next) {
-                draft = next;
-                break;
-              }
-            }
+            };
+            await selectModels(
+              ctx,
+              draft.candidates,
+              draft.selectedModelIds,
+              async (modelIds) => {
+                const next = await call("draft.selectModels", { ...ref(), modelIds });
+                if (next) draft = next;
+                return draft.selectedModelIds;
+              },
+              addManually,
+              signal,
+              providerContext,
+            );
           } else if (action.startsWith("model:")) {
             const modelId = action.slice(6);
             let model = draft.values.models.find((item: any) => item.id === modelId);

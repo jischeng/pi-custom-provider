@@ -15,7 +15,6 @@ export default function (pi: ExtensionAPI) {
     description: "Model metadata catalog URL; use off to disable the remote catalog",
     type: "string",
   });
-  const catalogUrl = pi.getFlag("provider-catalog-url");
   const directory = getAgentDir();
   const auth = new Authentication(directory);
   const runtime = createRuntimeAdapter(pi, auth);
@@ -23,7 +22,13 @@ export default function (pi: ExtensionAPI) {
     directory,
     runtime,
     authentication: auth,
-    discovery: { catalogUrl: catalogUrl === "off" ? null : typeof catalogUrl === "string" ? catalogUrl : undefined },
+    discovery: {
+      get catalogUrl() {
+        // Pi parses extension flags after loading the extension factory.
+        const value = pi.getFlag("provider-catalog-url");
+        return value === "off" ? null : typeof value === "string" ? value : undefined;
+      },
+    },
   });
   let controller: AbortController | undefined;
   let initialError: string | undefined;
