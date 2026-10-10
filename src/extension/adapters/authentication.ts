@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { safeKeys } from "./domain/schema";
-import { withLockedFile } from "./domain/file-store";
+import { safeKeys } from "../../domain/schema";
+import { withLockedFile } from "../../domain/file-store";
 import {
   createModels,
   type ProviderAuthInteraction,
@@ -16,9 +16,9 @@ import {
   type AuthResult,
 } from "@earendil-works/pi-ai";
 import * as catalog from "@earendil-works/pi-ai/providers/all";
-import { OperationError, checkAbort } from "./operations/errors";
-import type { ProviderConfig } from "./types";
-import type { Effects, OperationContext } from "./operations/types";
+import { OperationError, checkAbort } from "../../operations/errors";
+import type { ProviderConfig } from "../../domain/types";
+import type { Effects, OperationContext } from "../../operations/types";
 
 export class Authentication {
   constructor(
@@ -45,6 +45,22 @@ export class Authentication {
       if (error.code === "ENOENT") return {};
       throw new OperationError("AUTH_FAILED", "Could not read the credential store.");
     }
+  }
+  /** Pi's `/login` stores credentials under the provider id; this reports what it found. */
+  builtinStatus(id: string) {
+    const stored = this.raw()[id];
+    const mode = stored?.type === "oauth" ? "oauth" : stored ? "api_key" : "none";
+    return {
+      mode,
+      methodId: mode === "oauth" ? id : undefined,
+      status:
+        mode === "none"
+          ? "missing"
+          : stored?.type === "oauth" && stored.expires < Date.now()
+            ? "expired"
+            : "configured",
+      hasCredential: !!stored,
+    };
   }
   status(id: string, config: ProviderConfig) {
     const mode = this.mode(config);

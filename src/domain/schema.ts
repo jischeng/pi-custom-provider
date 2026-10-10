@@ -1,6 +1,6 @@
 import { Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
-import { API_CHOICES, THINKING_FORMAT_CHOICES } from "../pi-catalog";
+import { API_CHOICES, apiLabel } from "./catalog";
 import { OperationError } from "../operations/errors";
 export const object = (properties: Record<string, TSchema>, options = {}) =>
   Type.Object(properties, { additionalProperties: false, ...options });
@@ -12,14 +12,32 @@ export const enumOf = (values: readonly string[], options = {}) =>
     values.map((v) => Type.Literal(v)),
     options,
   );
-export const apiSchema = enumOf(API_CHOICES, { title: "API type" });
+/** Like `enumOf`, but each value carries the label a user should read instead of the raw id. */
+export const labeledEnum = (values: readonly string[], label: (value: string) => string, options = {}) =>
+  Type.Union(
+    values.map((v) => Type.Literal(v, { title: label(v) })),
+    options,
+  );
+// The enum titles are the human names, so every consumer shows them and still submits the id.
+export const apiSchema = labeledEnum(API_CHOICES, (value) => apiLabel(value as any), { title: "API type" });
 const positive = Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
 // Pi includes -1000000 in catalog entries such as OpenRouter automatic routing. Preserve that marker.
-const rate = Type.Union([Type.Literal(-1000000), Type.Number({ minimum: 0, maximum: 1e9 })]);
-const rates = { input: rate, output: rate, cacheRead: rate, cacheWrite: rate };
+const rate = (title: string) =>
+  Type.Union([Type.Literal(-1000000), Type.Number({ minimum: 0, maximum: 1e9 })], { title });
+const rates = {
+  input: rate("Input"),
+  output: rate("Output"),
+  cacheRead: rate("Cache read"),
+  cacheWrite: rate("Cache write"),
+};
 export const costSchema = object({
   ...rates,
-  tiers: Type.Optional(Type.Array(object({ inputTokensAbove: positive, ...rates }), { maxItems: 100 })),
+  tiers: Type.Optional(
+    Type.Array(object({ inputTokensAbove: { ...positive, title: "Tokens above" }, ...rates }), {
+      maxItems: 100,
+      title: "Price tiers",
+    }),
+  ),
 });
 export const thinkingSchema = object(
   Object.fromEntries(
@@ -70,7 +88,7 @@ export const compatSchema = object(
   {
     ...Object.fromEntries(bools.map((k) => [k, Type.Optional(Type.Boolean())])),
     maxTokensField: Type.Optional(enumOf(["max_completion_tokens", "max_tokens"])),
-    thinkingFormat: Type.Optional(enumOf(THINKING_FORMAT_CHOICES)),
+    thinkingFormat: Type.Optional(text({ maxLength: 64 })),
     cacheControlFormat: Type.Optional(Type.Literal("anthropic")),
     deferredToolsMode: Type.Optional(Type.Literal("kimi")),
     sessionAffinityFormat: Type.Optional(enumOf(["openai", "openai-nosession", "openrouter"])),
@@ -92,6 +110,10 @@ export const compatSchema = object(
   },
   { additionalProperties: true },
 );
+/** Request headers are write-only through `headers.set`, but the value must survive a round trip. */
+const headerMap = Type.Record(text({ maxLength: 256 }), text({ maxLength: 8192 }));
+/** Pi passes sampling parameters straight to the provider and treats them as extensible. */
+const samplingParams = Type.Record(text({ maxLength: 256 }), Type.Unknown());
 export const modelSchema = object({
   id: text({ minLength: 1, maxLength: 256, title: "Model ID" }),
   name: Type.Optional(text({ title: "Model name" })),
@@ -106,6 +128,23 @@ export const modelSchema = object({
   cost: Type.Optional({ ...costSchema, title: "Pricing" }),
   thinkingLevelMap: Type.Optional({ ...thinkingSchema, title: "Thinking level mapping" }),
   compat: Type.Optional({ ...compatSchema, title: "Compatibility settings" }),
+  headers: Type.Optional(headerMap),
+  samplingParams: Type.Optional(samplingParams),
+});
+/** The fields Pi lets a model override change; everything else of the built-in model is kept. */
+export const modelOverrideSchema = object({
+  name: Type.Optional(text({ title: "Model name" })),
+  reasoning: Type.Optional(Type.Boolean({ title: "Supports reasoning" })),
+  input: Type.Optional(
+    Type.Array(enumOf(["text", "image"]), { minItems: 1, uniqueItems: true, maxItems: 2, title: "Input types" }),
+  ),
+  contextWindow: Type.Optional({ ...positive, title: "Context window" }),
+  maxTokens: Type.Optional({ ...positive, title: "Maximum output tokens" }),
+  cost: Type.Optional({ ...costSchema, title: "Pricing" }),
+  thinkingLevelMap: Type.Optional({ ...thinkingSchema, title: "Thinking level mapping" }),
+  compat: Type.Optional({ ...compatSchema, title: "Compatibility settings" }),
+  headers: Type.Optional(headerMap),
+  samplingParams: Type.Optional(samplingParams),
 });
 export const authSchema = Type.Union(
   [
@@ -121,8 +160,14 @@ export const providerSchema = object({
   api: apiSchema,
   baseUrl: text({ minLength: 1, title: "Base URL" }),
   auth: authSchema,
-  authHeader: Type.Optional(enumOf(["auto", "on", "off"], { title: "Authorization Header" })),
+  authHeader: Type.Optional(
+    labeledEnum(["auto", "on", "off"], (value) => value[0].toUpperCase() + value.slice(1), {
+      title: "Authorization Header",
+    }),
+  ),
   compat: Type.Optional(compatSchema),
+  /** Patches for a provider Pi already ships; a record may contain only this field. */
+  modelOverrides: Type.Optional(Type.Record(text({ maxLength: 256 }), modelOverrideSchema)),
   models: Type.Array(modelSchema, { maxItems: 5000, title: "Models" }),
 });
 export const patchSchema = object(

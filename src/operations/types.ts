@@ -13,7 +13,6 @@ export type Failure = {
   fields?: { path: string; code: string; message: string }[];
 };
 export type Result = {
-  operationId: string;
   status: "succeeded" | "failed" | "cancelled" | "requires_user_action";
   data?: any;
   error?: Failure;
@@ -31,7 +30,6 @@ export type Interaction = {
   verificationUri?: string;
 };
 export interface OperationContext {
-  operationId: string;
   caller: Caller;
   signal: AbortSignal;
   effects: Effects;
@@ -49,10 +47,6 @@ export interface OperationDefinition {
   resultSchema: TSchema;
   effects: ("read" | "network" | "config_write" | "credential_write")[];
   allowedCallers: Caller[];
-  cancellable: boolean;
   execute(args: any, context: OperationContext): Promise<any>;
 }
 export type OperationDescriptor = Omit<OperationDefinition, "execute">;
-
-export const registrationChannel = "pi.extension-operations.register.v1";
-export type Registration = { namespace: string; operations: OperationDefinition[] };

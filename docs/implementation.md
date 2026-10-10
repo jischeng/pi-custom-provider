@@ -4,24 +4,49 @@
 
 ## 已实现
 
-- `src/domain`：共享配置、模型、草稿和认证操作；严格输入/输出校验；配置版本与草稿版本；文件锁和原子替换；保存与运行时同步分别报告结果。
-- `src/ui.ts` 和 `src/ui/`：页面依赖操作接口，原生 SettingsList 负责搜索、滚动、当前值和模型勾选，ExtensionEditorComponent 负责预填编辑，BorderedLoader 负责进度。ctx.ui.custom 仅用于挂载原生组件；没有自绘或按键解析。
-- `src/operations`：通用操作注册、描述、去重、任务状态、进度、取消、认证输入和安全错误。每个操作声明成功 data 的 JSON Schema。
-- `bin/pi-extension-rpc.mjs` 和 `src/rpc/extension.ts`：启动真实 Pi RPC，通过通用注册器执行扩展操作。原生 RPC 命令仍由 Pi 处理。通用传输代码没有供应商插件导入或插件名称分支。
-- `src/tools.ts`：模型可调用的管理子集，修改前使用原生用户确认，错误通过 Pi 的 tool_result 标记。
-- `src/oauth.ts` 和 `src/provider-registry.ts`：复用 Pi 公开 OAuth 和 Provider 接口。每次请求读取最新认证，凭据只在请求阶段解析，不进入可枚举的 Model 元数据。
+源码按以下职责组织，`src/index.ts` 保留包入口并转出扩展装配函数：
+
+```text
+src/
+├── index.ts
+├── domain/             # 配置类型、模型解析、校验、目录、存储与业务服务
+├── operations/         # 操作定义契约与唯一执行器（runner.ts）
+└── extension/          # Pi 扩展集成
+    ├── index.ts        # 生命周期、命令注册和依赖装配
+    ├── adapters/       # 认证、模型发现和运行时注册
+    ├── headless.ts     # Pi RPC 模式下的操作入口与结果 entry
+    ├── tools.ts        # 模型工具注册
+    └── tui/
+        ├── index.ts        # 只负责顶层循环与草稿生命周期
+        ├── client.ts       # 终端页面访问操作的唯一入口
+        ├── session.ts      # 单个供应商的草稿、写入与提交
+        ├── provider-panel.ts  # 分组列表控件（光标、搜索、屏幕让位）
+        ├── field-edit.ts   # 编辑某个值的唯一规则
+        ├── format.ts       # 值的唯一格式化
+        ├── components.ts   # Pi 原生控件的组合
+        └── screens/        # providers / create / provider / model / add-models
+```
+
+- `src/domain`：共享配置、模型、目录、草稿和认证操作；严格输入/输出校验；配置版本与草稿版本；文件锁和原子替换；保存与运行时同步分别报告结果。
+- `src/extension/tui/`：终端页面依赖操作接口，原生 SettingsList 负责搜索、滚动、当前值和模型勾选，ExtensionEditorComponent 负责预填编辑，BorderedLoader 负责进度。ctx.ui.custom 仅用于挂载原生组件；没有自绘或按键解析。
+- `src/operations`：操作定义（name/title/inputSchema/resultSchema/effects/allowedCallers）与唯一的执行器 `runner.ts`。输入输出校验、effects 记账、安全错误都在这里；没有任务存储、幂等缓存或事件流。
+- `src/domain/model.ts` 的 `resolveModel`：Pi 实际会注册的模型（未设置字段解析成运行时取值）。运行时适配器和终端页面共用它，所以"未设置"在两处含义一致。
+- `src/extension/headless.ts`：把同一套操作定义接到 Pi 自己的 RPC 模式。`/model-config <operation> <json>` 执行一条操作，输入走 Pi 的扩展 UI 子协议，结果作为 `provider-manager/result` 会话 entry 追加。没有自定义协议、传输或任务模型。
+- `src/extension/tools.ts`：模型可调用的管理子集，修改前使用原生用户确认，错误通过 Pi 的 tool_result 标记。
+- `src/extension/adapters/authentication.ts` 和 `src/extension/adapters/runtime.ts`：复用 Pi 公开 OAuth 和 Provider 接口。每次请求读取最新认证，凭据只在请求阶段解析，不进入可枚举的 Model 元数据。
 
 已删除旧 wizard.ts、provider-flow.ts、models-config.ts 及对应旧状态机测试。保留并复用模型发现、元数据匹配和完整 Pi 预设逻辑。
 
 ## 与初稿的明确差异
 
-1. 采用仓库内的通用桥，没有修改 Pi 上游。原版 Pi 的 RPC 不会因此增加接口；客户端需要启动桥或实现同等通用宿主。
+1. 不新增传输层，直接用 Pi 的 RPC 模式：`/model-config <operation> <json>` 执行操作，输入走扩展 UI 子协议，结果作为会话 entry 读回。早期实现里的自建桥（`bin/pi-extension-rpc.mjs`、`src/extension/rpc/`、`pi.extension-operations.v1`）以及随之而来的任务/快照/幂等/取消机制已全部删除。代价是不再有独立的 operationId 查询与取消：取消交给 Pi，结果读取改为 `get_entries`。
 2. Pi 0.82.0 包根不导出 AuthStorage / FileAuthStorageBackend。使用公开 CredentialStore 接口配合集中式文件适配器，未从私有路径导入认证存储。
 3. 供应商改名保留稳定的内部凭据绑定，不复制凭据。改变供应商或模型的目标地址/API 时解除旧绑定和 Header，避免无意沿用旧认证。
 4. resultSchema 描述成功 data，execute 返回 data；通用层产生统一结果。认证缺失可成为 requires_user_action 的最终结果，认证输入等待则是没有 result 的中间状态。
 5. JSONL 桥不提供网络重连。关闭 stdin 会终止会话，状态不会跨进程恢复；当前进程内支持任务查询及去重。
-6. 新增供应商可先保存空模型配置，再配置认证并重新进入发现。Pi 原生 input 不支持密码遮罩；终端明确提示输入可见。未为此实现自定义输入框。
+6. 新增供应商在创建时收集 API Key 或 OAuth（登录 / 导入 JSON / 文件路径），凭据立即写入 Pi 凭据存储，因此首次保存前即可自动发现模型。所有界面修改自动提交，没有 Save / Discard 步骤；供应商页在同一屏幕显示可编辑字段、模型和操作。Header 仍需要已保存的供应商。Pi 原生 input 不支持密码遮罩；终端明确提示输入可见。未为此实现自定义输入框。
 7. 完整 Pi 模型目录测试发现 `thinkingLevelMap.off` 和 OpenRouter Auto Router 的特殊价格值 `-1000000`。schema 原样保留这些 Pi 元数据，未静默改成零。
+8. 模型预设沿用 catalog 构建时的亲和度规则排序：先按模型 ID 匹配，再按 base URL endpoint（16）、origin（8）、provider ID（4）、provider name（2）。`catalog.presets` 会带上当前 provider 的 id/name/baseUrl，因此同一端点的预设排在最前（例如 `open.bigmodel.cn` 的 `glm-5.3` 首选 `zai-coding-cn`）。
 
 ## 可重复运行的验证
 

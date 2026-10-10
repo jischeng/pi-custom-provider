@@ -1,5 +1,4 @@
-/** Public protocol registration types for other Pi extensions. */
-export { registrationChannel } from "./types";
+/** Public contract for extensions that declare operations. */
 export type {
   Caller,
   Effects,
@@ -9,6 +8,6 @@ export type {
   OperationContext,
   OperationDefinition,
   OperationDescriptor,
-  Registration,
 } from "./types";
+export { descriptorOf, findOperation, operationsFor, runOperation } from "./runner";
 export { OperationError } from "./errors";

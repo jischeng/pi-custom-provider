@@ -2,8 +2,15 @@ import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import * as fs from "node:fs";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { Authentication } from "../oauth";
-import { discover, recommend, listModelPresets, type DiscoveryOptions } from "../discovery";
+import { Authentication } from "../extension/adapters/authentication";
+import {
+  discover,
+  knownProviders,
+  type KnownProvider,
+  recommend,
+  listModelPresets,
+  type DiscoveryOptions,
+} from "../extension/adapters/discovery";
 import {
   API_CHOICES,
   OAUTH_PROVIDER_CHOICES,
@@ -11,7 +18,7 @@ import {
   oauthProviderLabel,
   oauthProviderChoicesForApi,
   apiSupportsApiKey,
-} from "../pi-catalog";
+} from "./catalog";
 import { ConfigStore } from "./store";
 import {
   object,
@@ -21,6 +28,7 @@ import {
   providerSchema,
   patchSchema,
   modelSchema,
+  modelOverrideSchema,
   apiSchema,
   secret,
   pageSchema,
@@ -32,8 +40,9 @@ import {
 import { dataSchema } from "./results";
 import { OperationError, checkAbort } from "../operations/errors";
 import type { OperationContext, OperationDefinition } from "../operations/types";
-import type { RuntimeAdapter } from "../provider-registry";
-import type { ModelConfig, ProviderConfig, ModelsConfig } from "../types";
+import type { RuntimePort } from "./ports";
+import { modelConfigFromPi } from "./model";
+import { isOverrideRecord, type ModelConfig, type ModelsConfig, type ProviderConfig } from "./types";
 
 type Draft = {
   draftId: string;
@@ -44,10 +53,12 @@ type Draft = {
   provider: ProviderConfig;
   candidates: ModelConfig[];
   updated: number;
+  /** True when draft.create stored a new credential that draft.discard must remove. */
+  ownsCredential?: boolean;
 };
 export interface ServiceOptions {
   directory: string;
-  runtime: RuntimeAdapter;
+  runtime: RuntimePort;
   authentication?: Authentication;
   discovery?: DiscoveryOptions;
   now?: () => number;
@@ -74,6 +85,83 @@ export class ProviderService {
     const p = s.config.providers[id];
     if (!p) throw new OperationError("NOT_FOUND", "Provider not found.");
     return { ...s, provider: this.normalized(id, p) };
+  }
+  /** A provider Pi already ships, if this id names one. */
+  private builtin(id: string) {
+    return builtinProviders().find((provider) => provider.id === id);
+  }
+  /**
+   * A record Pi accepts for a built-in provider may contain only `modelOverrides`. Its endpoint,
+   * API and models come from Pi itself, so nothing here is written back.
+   */
+  private overrideRecord(provider: any): boolean {
+    return isOverrideRecord(provider);
+  }
+  /**
+   * What a credential write targets. A provider Pi ships has no record, so its config is
+   * synthesized: the key stays the provider id (where Pi's own `/login` put it) and its OAuth
+   * flow is Pi's.
+   */
+  private authTarget(id: string): { provider: ProviderConfig; revision: string; stored: boolean } {
+    const state = this.store.read();
+    const record = state.config.providers[id];
+    if (record && !this.overrideRecord(record))
+      return { provider: this.normalized(id, record), revision: state.revision, stored: true };
+    const builtin = this.builtin(id);
+    if (!builtin) throw new OperationError("NOT_FOUND", "Provider not found.");
+    const status = this.auth.builtinStatus(id);
+    const oauth = !!builtin.auth?.oauth;
+    return {
+      provider: {
+        baseUrl: builtin.baseUrl ?? "",
+        api: builtin.getModels()[0]?.api as ProviderConfig["api"],
+        models: [],
+        authMode: status.hasCredential ? (status.mode === "oauth" ? "oauth" : "api_key") : oauth ? "oauth" : "api_key",
+        oauthProvider: oauth ? (id as any) : undefined,
+        modelOverrides: record?.modelOverrides,
+      },
+      revision: state.revision,
+      stored: false,
+    };
+  }
+  /** The record may not exist for a provider Pi ships; only touch what is actually there. */
+  private clearStoredCredentialFields(config: ModelsConfig, id: string) {
+    const record: any = config.providers[id];
+    if (!record) return;
+    delete record.oauthJsonPath;
+    delete record.apiKey;
+    if (!Object.keys(record).length) delete config.providers[id];
+  }
+  private builtinView(id: string, record: any, configRevision: string) {
+    const builtin = this.builtin(id)!;
+    const overrides: Record<string, any> = record?.modelOverrides ?? {};
+    const builtinApi = builtin.getModels()[0]?.api;
+    // The runtime reports the models Pi actually uses, overrides included, so the page and the
+    // request path can never disagree about a built-in model.
+    // Pi's registry already applied every layer, so this is what the provider actually serves.
+    // Without a bound runtime the models are reported as Pi ships them, with the patches alongside.
+    const models = this.options.runtime.modelsOf?.(id) ?? builtin.getModels().map(modelConfigFromPi);
+    const values = {
+      id,
+      name: builtin.name,
+      api: builtinApi,
+      baseUrl: builtin.baseUrl,
+      auth: { mode: "none" },
+      authHeader: "auto",
+      models,
+    };
+    return {
+      ...values,
+      revision: configRevision,
+      source: "builtin",
+      overriddenModelIds: Object.keys(overrides).sort(),
+      modelOverrides: overrides,
+      auth: this.auth.builtinStatus(id),
+      headers: [],
+      modelHeaders: [],
+      runtimeStatus: this.runtimeFailed ? "failed" : "ready",
+      modelCount: models.length,
+    };
   }
   private publicConfig(id: string, provider: ProviderConfig): any {
     const p = this.normalized(id, provider);
@@ -103,6 +191,7 @@ export class ProviderService {
     };
   }
   view(id: string, provider: ProviderConfig, configRevision: string) {
+    if (this.builtin(id) && this.overrideRecord(provider)) return this.builtinView(id, provider, configRevision);
     const values = JSON.parse(JSON.stringify(this.publicConfig(id, provider)));
     try {
       validate(providerSchema, values);
@@ -121,6 +210,8 @@ export class ProviderService {
     return {
       ...values,
       revision: configRevision,
+      source: "configured",
+      overriddenModelIds: Object.keys(provider.modelOverrides ?? {}).sort(),
       auth: this.auth.status(id, this.normalized(id, provider)),
       headers: Object.keys(provider.headers || {}).map((name) => ({ name, hasValue: true })),
       modelHeaders: provider.models
@@ -410,7 +501,6 @@ export class ProviderService {
       resultSchema: dataSchema(name),
       effects,
       allowedCallers: userOnly ? ["user_client"] : [...all],
-      cancellable: true,
       execute,
     });
     const target = object({ providerId: id });
@@ -418,19 +508,43 @@ export class ProviderService {
     const select = { modelIds: Type.Array(text({ minLength: 1 }), { uniqueItems: true, maxItems: 5000 }) };
     const resolveTarget = (a: any) => {
       if (a.draftId) {
+        if (a.providerId)
+          throw new OperationError("VALIDATION_ERROR", "Target either a provider or a draft, not both.", [
+            { path: "/draftId", code: "CONFLICTING_FIELDS", message: "Remove providerId when targeting a draft." },
+          ]);
+        if (!a.revision)
+          throw new OperationError("VALIDATION_ERROR", "A draft revision is required when targeting a draft.", [
+            { path: "/revision", code: "MISSING_FIELD", message: "Provide the draft revision." },
+          ]);
         const d = this.draft(a.draftId, a.revision);
         return { id: d.id, provider: d.provider, draft: d };
       }
+      if (!a.providerId)
+        throw new OperationError("VALIDATION_ERROR", "A provider ID or a draft reference is required.", [
+          { path: "/providerId", code: "MISSING_FIELD", message: "Provide a provider ID or a draft reference." },
+        ]);
       const s = this.stored(a.providerId);
       return { id: a.providerId as string, provider: s.provider, draft: undefined };
     };
-    const eitherTarget = Type.Union([target, object(draftTarget)]);
+    // Providers require a tool schema whose root is an object, so the provider/draft
+    // target is expressed as optional properties and resolved explicitly above.
+    const eitherTarget = object({
+      providerId: Type.Optional(id),
+      draftId: Type.Optional(text({ minLength: 1 })),
+      revision: Type.Optional(Type.Integer({ minimum: 1 })),
+    });
     return [
       def("provider.list", "List providers", object(pageSchema), ["read"], async (a) => {
         const s = this.store.read();
+        const stored = Object.keys(s.config.providers);
+        // Providers Pi ships are listed once they are usable (a stored credential) or adjusted,
+        // so a logged-in provider is visible here without flooding the list with all of them.
+        const loggedIn = builtinProviders()
+          .filter((provider) => !stored.includes(provider.id) && this.auth.builtinStatus(provider.id).hasCredential)
+          .map((provider) => this.view(provider.id, {} as ProviderConfig, s.revision));
         return {
           ...this.page(
-            Object.entries(s.config.providers).map(([id, p]) => this.view(id, p, s.revision)),
+            [...stored.map((id) => this.view(id, s.config.providers[id], s.revision)), ...loggedIn],
             a,
             s.revision,
           ),
@@ -438,8 +552,11 @@ export class ProviderService {
         };
       }),
       def("provider.get", "Provider details", target, ["read"], async (a) => {
-        const s = this.stored(a.providerId);
-        return this.view(a.providerId, s.provider, s.revision);
+        const s = this.store.read();
+        const provider = s.config.providers[a.providerId];
+        if (provider) return this.view(a.providerId, provider, s.revision);
+        if (this.builtin(a.providerId)) return this.view(a.providerId, {} as ProviderConfig, s.revision);
+        throw new OperationError("NOT_FOUND", "Provider not found.");
       }),
       def("provider.create", "Create provider", providerSchema, ["config_write"], async (a, c) => {
         this.conflictId(a.id);
@@ -503,47 +620,98 @@ export class ProviderService {
         "API and authentication options",
         object({ api: Type.Optional(apiSchema) }),
         ["read"],
-        async (a) => ({
-          apis: API_CHOICES.map((id) => ({ id, label: apiLabel(id) })),
-          authMethods: [
-            ...(!a.api || apiSupportsApiKey(a.api)
-              ? [
-                  { id: "none", label: "No authentication", value: { mode: "none" } },
-                  { id: "api_key", label: "API Key", value: { mode: "api_key" } },
-                ]
-              : []),
-            ...(a.api ? oauthProviderChoicesForApi(a.api) : OAUTH_PROVIDER_CHOICES).map((id) => ({
-              id: `oauth/${id}`,
-              label: oauthProviderLabel(id),
-              value: { mode: "oauth", methodId: id },
-            })),
-          ],
-        }),
+        async (a) => {
+          // Known endpoints, so a base URL never has to be recalled from memory.
+          const providers = knownProviders();
+          return {
+            apis: API_CHOICES.map((id) => ({ id, label: apiLabel(id) })),
+            providers: (a.api ? providers.filter((provider) => provider.apis.includes(a.api)) : providers).map(
+              ({ id, name, baseUrl, apis, auth }: KnownProvider) => ({ id, name, baseUrl, apis, auth }),
+            ),
+            authMethods: [
+              ...(!a.api || apiSupportsApiKey(a.api)
+                ? [
+                    { id: "none", label: "No authentication", value: { mode: "none" } },
+                    { id: "api_key", label: "API Key", value: { mode: "api_key" } },
+                  ]
+                : []),
+              ...(a.api ? oauthProviderChoicesForApi(a.api) : OAUTH_PROVIDER_CHOICES).map((id) => ({
+                id: `oauth/${id}`,
+                label: oauthProviderLabel(id),
+                value: { mode: "oauth", methodId: id },
+              })),
+            ],
+          };
+        },
       ),
       def(
         "catalog.presets",
         "Model presets",
-        object({ api: apiSchema, modelId: text(), ...pageSchema }),
+        object({
+          api: apiSchema,
+          modelId: text(),
+          providerId: Type.Optional(text()),
+          providerName: Type.Optional(text()),
+          baseUrl: Type.Optional(text()),
+          ...pageSchema,
+        }),
         ["read"],
         async (a) =>
           this.page(
-            listModelPresets(a.api, a.modelId).map((p) => ({
+            listModelPresets(a.api, a.modelId, {
+              id: a.providerId,
+              name: a.providerName,
+              baseUrl: a.baseUrl,
+            }).map((p) => ({
               id: p.key,
               label: p.label,
               model: this.candidate(p.model).model,
             })),
             a,
-            `0.82.0:${a.api}:${a.modelId}`,
+            `0.82.0:${a.api}:${a.modelId}:${a.providerId || ""}:${a.baseUrl || ""}`,
           ),
       ),
       def(
         "draft.create",
         "Create configuration draft",
-        providerSchema,
-        ["read"],
-        async (a) => {
+        object({
+          ...providerSchema.properties,
+          apiKey: Type.Optional(secret),
+          oauthJson: Type.Optional(secret),
+          oauthJsonPath: Type.Optional(secret),
+        }),
+        ["read", "credential_write"],
+        async (a, c) => {
           this.conflictId(a.id);
-          return this.draftView(this.newDraft(a.id, this.build(a), this.store.read().revision));
+          const { apiKey, oauthJson, oauthJsonPath, ...values } = a;
+          const provider = this.build(values);
+          if (typeof oauthJsonPath === "string" && oauthJsonPath) provider.oauthJsonPath = oauthJsonPath;
+          const draft = this.newDraft(a.id, provider, this.store.read().revision);
+          if (typeof apiKey === "string" && apiKey) {
+            await this.auth.saveCredential(draft.id, draft.provider, { type: "api_key", key: apiKey }, c);
+            draft.ownsCredential = true;
+          } else if (typeof oauthJson === "string" && oauthJson) {
+            const credential = this.auth.importedCredential(draft.id, draft.provider, oauthJson);
+            await this.auth.saveCredential(draft.id, draft.provider, credential, c);
+            draft.ownsCredential = true;
+          }
+          return this.draftView(draft);
+        },
+        true,
+      ),
+      def(
+        "draft.login",
+        "Sign in to the draft provider",
+        object(draftTarget),
+        ["network", "credential_write"],
+        async (a, c) => {
+          const d = this.draft(a.draftId, a.revision);
+          if (this.auth.mode(d.provider) !== "oauth")
+            throw new OperationError("VALIDATION_ERROR", "The draft does not use OAuth.");
+          const credential = await this.auth.login(d.provider, c);
+          await this.auth.saveCredential(d.id, d.provider, credential, c);
+          d.ownsCredential = true;
+          return this.draftView(d);
         },
         true,
       ),
@@ -606,10 +774,11 @@ export class ProviderService {
         "draft.discard",
         "Discard draft",
         object(draftTarget),
-        ["read"],
-        async (a) => {
+        ["read", "credential_write"],
+        async (a, c) => {
           const d = this.draft(a.draftId, a.revision);
           this.drafts.delete(d.draftId);
+          if (d.ownsCredential) await this.auth.saveCredential(d.id, d.provider, undefined, c);
           return { discarded: true };
         },
         true,
@@ -669,7 +838,11 @@ export class ProviderService {
           const d = this.draft(a.draftId, a.revision);
           const model = d.provider.models.find((m) => m.id === a.modelId);
           if (!model) throw new OperationError("NOT_FOUND", "Model not found.");
-          const preset = listModelPresets(d.provider.api, a.modelId).find((p) => p.key === a.presetId);
+          const preset = listModelPresets(d.provider.api, a.modelId, {
+            id: d.id,
+            name: d.provider.name,
+            baseUrl: d.provider.baseUrl,
+          }).find((p) => p.key === a.presetId);
           if (!preset) throw new OperationError("NOT_FOUND", "Preset not found.");
           const { suggestedBy, ...fields } = preset.model;
           const models = d.provider.models.map((m) => (m.id === a.modelId ? { ...m, ...fields, id: a.modelId } : m));
@@ -744,7 +917,9 @@ export class ProviderService {
         },
       ),
       def("auth.status", "Authentication status", target, ["read"], async (a) =>
-        this.auth.status(a.providerId, this.stored(a.providerId).provider),
+        this.authTarget(a.providerId).stored
+          ? this.auth.status(a.providerId, this.authTarget(a.providerId).provider)
+          : this.auth.builtinStatus(a.providerId),
       ),
       ...(["configure", "import", "begin", "clear"] as const).map((action) =>
         def(
@@ -762,12 +937,12 @@ export class ProviderService {
           }),
           ["credential_write", "config_write", ...(action === "begin" ? ["network" as const] : [])],
           async (a, c) => {
-            const s = this.stored(a.providerId);
+            const s = this.authTarget(a.providerId);
             if (s.revision !== a.expectedRevision)
               throw new OperationError("CONFLICT", "The configuration has changed. Reload it before authenticating.");
             this.requireIdle();
-            if (action === "configure" && this.auth.mode(s.provider) !== "api_key")
-              throw new OperationError("VALIDATION_ERROR", "The current authentication method is not API key.");
+            if (action === "begin" && !s.provider.oauthProvider)
+              throw new OperationError("VALIDATION_ERROR", "This provider has no OAuth sign-in.");
             const credential =
               action === "begin"
                 ? await this.auth.login(s.provider, c)
@@ -782,14 +957,15 @@ export class ProviderService {
               async (config) => {
                 this.requireIdle();
                 await this.auth.saveCredential(a.providerId, s.provider, credential, c);
-                delete config.providers[a.providerId].oauthJsonPath;
-                delete config.providers[a.providerId].apiKey;
+                this.clearStoredCredentialFields(config, a.providerId);
               },
               c.signal,
             );
             c.effects.config = "committed";
             await this.sync(c);
-            return this.auth.status(a.providerId, this.stored(a.providerId).provider);
+            return this.authTarget(a.providerId).stored
+              ? this.auth.status(a.providerId, this.authTarget(a.providerId).provider)
+              : this.auth.builtinStatus(a.providerId);
           },
           true,
         ),
@@ -816,6 +992,46 @@ export class ProviderService {
           return { configured: true };
         },
         true,
+      ),
+      def(
+        "model.override",
+        "Adjust a model Pi ships",
+        object({
+          providerId: id,
+          modelId: text({ minLength: 1, maxLength: 256 }),
+          expectedRevision: revision,
+          set: Type.Optional(modelOverrideSchema),
+          unset: Type.Optional(Type.Array(text({ maxLength: 256 }), { maxItems: 64 })),
+        }),
+        ["config_write"],
+        async (a, c) => {
+          const builtin = this.builtin(a.providerId);
+          if (!builtin) throw new OperationError("VALIDATION_ERROR", "Only a provider Pi ships can be adjusted here.");
+          if (!builtin.getModels().some((model) => model.id === a.modelId))
+            throw new OperationError("NOT_FOUND", "Pi does not ship that model for this provider.");
+          this.requireIdle();
+          if (a.set) validate(modelOverrideSchema, a.set);
+          await this.store.commit(
+            a.expectedRevision,
+            (config) => {
+              const record: any = config.providers[a.providerId];
+              const overrides: Record<string, any> = { ...(record?.modelOverrides ?? {}) };
+              const patch: Record<string, any> = { ...(overrides[a.modelId] ?? {}), ...(a.set ?? {}) };
+              for (const key of a.unset ?? []) delete patch[key];
+              if (Object.keys(patch).length) overrides[a.modelId] = patch;
+              else delete overrides[a.modelId];
+              // The record holds nothing but patches, so Pi keeps its own endpoint and models.
+              if (Object.keys(overrides).length)
+                config.providers[a.providerId] = { modelOverrides: overrides } as ProviderConfig;
+              else delete config.providers[a.providerId];
+            },
+            c.signal,
+          );
+          c.effects.config = "committed";
+          await this.sync(c);
+          const s = this.store.read();
+          return this.view(a.providerId, s.config.providers[a.providerId] ?? ({} as ProviderConfig), s.revision);
+        },
       ),
       def(
         "headers.set",

@@ -1,13 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { ProviderService } from "./domain/service";
-import { Authentication } from "./oauth";
-import { createRuntimeAdapter } from "./provider-registry";
-import { registrationChannel } from "./operations/types";
-import { failure } from "./operations/errors";
-import { runSetup } from "./ui";
-import { createUiOperations } from "./ui/operations";
-import { dialogContext } from "./ui/dialogs";
+import { ProviderService } from "../domain/service";
+import { Authentication } from "./adapters/authentication";
+import { createRuntimeAdapter } from "./adapters/runtime";
+import { failure } from "../operations/errors";
+import { runSetup } from "./tui";
+import { createTuiOperations } from "./tui/operations";
+import { registerResultRenderer, runHeadlessCommand } from "./headless";
 import { registerManagementTools } from "./tools";
 
 export default function (pi: ExtensionAPI) {
@@ -39,8 +38,7 @@ export default function (pi: ExtensionAPI) {
   } catch (error) {
     initialError = failure(error).message;
   }
-  // Public event bus registration, consumed only by a host implementing the generic operations bridge.
-  pi.events.emit(registrationChannel, { namespace: "provider-manager", operations: service.definitions() });
+  registerResultRenderer(pi);
   pi.on("session_start", async (_event, ctx) => {
     runtime.bind(ctx);
     if (initialError) ctx.ui.notify(initialError, "error");
@@ -49,19 +47,23 @@ export default function (pi: ExtensionAPI) {
     controller?.abort();
     service.dispose();
   });
-  pi.registerCommand("provider-setup", {
+  pi.registerCommand("model-config", {
     description: "Manage providers, models, and authentication using native Pi controls",
     handler: async (args, ctx) => {
       runtime.bind(ctx);
+      const [operation, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+      // Arguments select a headless operation: the same command works in the terminal UI
+      // and in Pi's RPC mode, where the result is a session entry.
+      if (operation && operation !== "cancel" && operation !== "tui") {
+        await runHeadlessCommand(pi, ctx, service.definitions(), operation, rest.join(" "));
+        return;
+      }
       if (args.trim() === "cancel") {
         controller?.abort();
         return;
       }
       if (ctx.mode !== "tui") {
-        ctx.ui.notify(
-          "Use the extension operations RPC for programmatic access. This command is for the terminal UI.",
-          "error",
-        );
+        await runHeadlessCommand(pi, ctx, service.definitions(), undefined, "");
         return;
       }
       if (controller) {
@@ -70,8 +72,7 @@ export default function (pi: ExtensionAPI) {
       }
       controller = new AbortController();
       try {
-        const dialogs = dialogContext(ctx);
-        await runSetup(createUiOperations(service.definitions(), dialogs), dialogs, controller.signal);
+        await runSetup(createTuiOperations(service.definitions(), ctx), ctx, controller.signal);
       } finally {
         controller = undefined;
       }

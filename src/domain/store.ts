@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { withLockedFile } from "./file-store";
 import { OperationError, checkAbort } from "../operations/errors";
 import { safeKeys } from "./schema";
-import type { ModelsConfig } from "../types";
+import type { ModelsConfig } from "./types";
 export class ConfigStore {
   readonly file: string;
   constructor(readonly directory: string) {

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { object, text, enumOf, providerSchema, modelSchema, authSchema } from "./schema";
+import { object, text, enumOf, providerSchema, modelSchema, modelOverrideSchema, authSchema } from "./schema";
 
 const auth = object({
   mode: enumOf(["none", "api_key", "oauth"]),
@@ -9,6 +9,11 @@ const auth = object({
 });
 const provider = object({
   ...providerSchema.properties,
+  /** Whether Pi ships this provider or the user configured it, and which models were adjusted. */
+  source: enumOf(["configured", "builtin"]),
+  overriddenModelIds: Type.Array(text()),
+  /** The raw patches for a built-in provider; Pi applies them on top of the models above. */
+  modelOverrides: Type.Optional(Type.Record(text(), modelOverrideSchema)),
   auth,
   revision: text(),
   headers: Type.Array(object({ name: text(), hasValue: Type.Boolean() })),
@@ -41,6 +46,7 @@ const draft = object({
 const schemas: Record<string, any> = {
   "provider.list": page(provider, { revision: text() }),
   "provider.get": provider,
+  "model.override": provider,
   "provider.create": provider,
   "provider.update": provider,
   "provider.selectModels": provider,
@@ -48,6 +54,15 @@ const schemas: Record<string, any> = {
   "runtime.sync": object({ ready: Type.Boolean() }),
   "catalog.list": object({
     apis: Type.Array(object({ id: text(), label: text() })),
+    providers: Type.Array(
+      object({
+        id: text(),
+        name: text(),
+        baseUrl: Type.Optional(text()),
+        apis: Type.Array(text()),
+        auth: Type.Array(enumOf(["api_key", "oauth"])),
+      }),
+    ),
     authMethods: Type.Array(object({ id: text(), label: text(), value: authSchema })),
   }),
   "catalog.presets": page(object({ id: text(), label: text(), model: modelSchema })),
@@ -59,7 +74,17 @@ const schemas: Record<string, any> = {
   "auth.file": object({ configured: Type.Boolean() }),
   "headers.set": object({ configured: Type.Boolean() }),
 };
-for (const name of ["create", "open", "get", "patch", "selectModels", "upsertModel", "removeModel", "applyPreset"])
+for (const name of [
+  "create",
+  "open",
+  "get",
+  "patch",
+  "selectModels",
+  "upsertModel",
+  "removeModel",
+  "applyPreset",
+  "login",
+])
   schemas[`draft.${name}`] = draft;
 for (const name of ["status", "configure", "import", "begin", "clear"]) schemas[`auth.${name}`] = auth;
 /** Describes the successful result.data, not the common task envelope. */

@@ -3,90 +3,57 @@ import assert from "node:assert/strict";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { rpc, repo } from "./rpc-helper";
-test("real Pi generic RPC carries typed authentication actions and cancels pending input", async () => {
-  const p = await rpc(true, ["-e", path.join(repo, "tests/fixtures/auth-operations.ts")]);
+
+test("headless authentication uses Pi's extension UI protocol and never exposes secrets", async () => {
+  const p = await rpc(["-e", path.join(repo, "tests/fixtures/auth-operations.ts")], undefined, "auth-fixture");
   try {
-    const provider = await p.invoke("auth-fixture/provider.create", {
+    const provider = await p.invoke("provider.create", {
       id: "auth-test",
       api: "openai-codex-responses",
       baseUrl: "https://fixture.invalid",
       auth: { mode: "oauth", methodId: "openai-codex" },
       models: [],
     });
-    assert.equal(provider.status, "succeeded");
-    const args = { providerId: "auth-test", expectedRevision: provider.data.revision };
-    const begin = await p.command("invoke_extension_operation", {
-      operation: "auth-fixture/auth.begin",
-      arguments: args,
-      requestId: "auth-start",
-    });
-    const operationId = begin.data.operationId;
-    const select = await p.wait(
-      (e) => e.operationId === operationId && e.type === "extension_interaction_request" && e.options,
+    assert.equal(provider.status, "succeeded", JSON.stringify(provider.error));
+    const { result, prompts } = await p.invokeWithAnswers(
+      "auth.begin",
+      { providerId: "auth-test", expectedRevision: provider.data.revision },
+      ["device", "fixture-code"],
     );
-    const invalid = await p.command("respond_extension_interaction", {
-      operationId,
-      interactionId: select.interactionId,
-      revision: select.revision,
-      response: { value: "Device method" },
-    });
-    assert.equal(invalid.success, false);
-    assert.equal(
-      (
-        await p.command("respond_extension_interaction", {
-          operationId,
-          interactionId: select.interactionId,
-          revision: select.revision,
-          response: { value: "device" },
-        })
-      ).success,
-      true,
-    );
-    const manual = await p.wait(
-      (e) => e.operationId === operationId && e.type === "extension_interaction_request" && e.kind === "manual_code",
-    );
-    assert.equal(manual.secret, true);
-    await p.command("respond_extension_interaction", {
-      operationId,
-      interactionId: manual.interactionId,
-      revision: manual.revision,
-      response: { value: "fixture-code" },
-    });
-    assert.equal(
-      (await p.wait((e) => e.operationId === operationId && e.type === "extension_operation_result")).result.status,
-      "succeeded",
-    );
-    const saved = fs.readFileSync(path.join(p.root, "agent/auth.json"), "utf8");
-    const again = await p.command("invoke_extension_operation", {
-      operation: "auth-fixture/auth.begin",
-      arguments: args,
-      requestId: "auth-cancel",
-    });
-    const pending = await p.wait(
-      (e) =>
-        e.operationId === again.data.operationId && e.type === "extension_interaction_request" && e.requiresResponse,
-    );
-    await p.command("cancel_extension_operation", { operationId: again.data.operationId });
-    assert.equal(
-      (await p.wait((e) => e.operationId === again.data.operationId && e.type === "extension_operation_result")).result
-        .status,
-      "cancelled",
-    );
-    assert.equal(
-      (
-        await p.command("respond_extension_interaction", {
-          operationId: again.data.operationId,
-          interactionId: pending.interactionId,
-          revision: pending.revision,
-          response: { value: "device" },
-        })
-      ).success,
-      false,
-    );
-    assert.equal(fs.readFileSync(path.join(p.root, "agent/auth.json"), "utf8"), saved);
-    assert(!JSON.stringify(p.events).includes("SENTINEL"));
-    assert(!p.events.some((e) => e.type === "extension_ui_request"));
+    assert.equal(result.status, "succeeded", JSON.stringify(result.error));
+    assert.equal(prompts, 2);
+    const requests = p.events.filter((e) => e.type === "extension_ui_request");
+    const select = requests.find((e) => e.method === "select");
+    assert.deepEqual(select.options, ["Device method (device)"]);
+    const input = requests.find((e) => e.method === "input");
+    assert.match(input.title, /input is visible/);
+    assert(requests.some((e) => e.method === "notify" && /fixture\.invalid/.test(e.message)));
+    assert(fs.readFileSync(path.join(p.root, "agent/auth.json"), "utf8").includes("SENTINEL_ACCESS"));
+    assert(!JSON.stringify(p.events).includes("SENTINEL_ACCESS"));
     assert.equal(p.stderr, "");
+  } finally {
+    await p.close();
+  }
+});
+
+test("a cancelled prompt fails the operation without writing credentials", async () => {
+  const p = await rpc(["-e", path.join(repo, "tests/fixtures/auth-operations.ts")], undefined, "auth-fixture");
+  try {
+    const provider = await p.invoke("provider.create", {
+      id: "auth-cancel",
+      api: "openai-codex-responses",
+      baseUrl: "https://fixture.invalid",
+      auth: { mode: "oauth", methodId: "openai-codex" },
+      models: [],
+    });
+    const { result } = await p.invokeWithAnswers(
+      "auth.begin",
+      { providerId: "auth-cancel", expectedRevision: provider.data.revision },
+      [undefined],
+    );
+    assert.equal(result.status, "cancelled");
+    const authFile = path.join(p.root, "agent/auth.json");
+    assert(!fs.existsSync(authFile) || !fs.readFileSync(authFile, "utf8").includes("SENTINEL_ACCESS"));
   } finally {
     await p.close();
   }

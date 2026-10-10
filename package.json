@@ -2,7 +2,7 @@
   "name": "@d4rw1nz/pi-custom-provider",
   "version": "1.0.8",
   "type": "module",
-  "description": "Manage Pi providers and models through native TUI, programmatic RPC, and confirmed agent tools",
+  "description": "Manage Pi providers and models through the native TUI, Pi RPC commands, and confirmed agent tools",
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -27,14 +27,12 @@
   "homepage": "https://github.com/d4rw1nz/pi-custom-provider#readme",
   "files": [
     "src",
-    "bin",
     "docs",
     "assets/cover.png"
   ],
   "scripts": {
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc",
-    "rpc": "node bin/pi-extension-rpc.mjs -e ./src/index.ts",
     "pack:check": "npm pack --dry-run"
   },
   "engines": {
@@ -67,9 +65,6 @@
   },
   "dependencies": {
     "proper-lockfile": "4.1.2"
-  },
-  "bin": {
-    "pi-extension-rpc": "bin/pi-extension-rpc.mjs"
   },
   "exports": {
     ".": "./src/index.ts",

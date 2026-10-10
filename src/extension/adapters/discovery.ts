@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { OperationError, checkAbort } from "./operations/errors";
+import { OperationError, checkAbort } from "../../operations/errors";
 // Model discovery — native API calls + models.dev catalog fallback
-import type { DiscoveredModel, ProviderConfig } from "./types";
-import { usesAuthHeader } from "./types";
+import type { DiscoveredModel, ProviderConfig } from "../../domain/types";
+import { usesAuthHeader } from "../../domain/types";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { Api, Model, ModelCost, ThinkingLevelMap } from "@earendil-works/pi-ai";
 
@@ -222,12 +222,10 @@ async function discoverNative(
   if (api === "anthropic-messages") return discoverAnthropic(bp, key);
   if (api === "google-generative-ai") return discoverGemini(bp, key);
   if (api === "google-vertex") return discoverVertex(bp, key);
-  discoveryContext
-    .getStore()
-    ?.warnings.push({
-      code: "DISCOVERY_UNSUPPORTED",
-      message: "Model discovery is not implemented for this API. Add models manually.",
-    });
+  discoveryContext.getStore()?.warnings.push({
+    code: "DISCOVERY_UNSUPPORTED",
+    message: "Model discovery is not implemented for this API. Add models manually.",
+  });
   return [];
 }
 
@@ -373,12 +371,10 @@ async function loadCatalog(): Promise<Record<string, ModelsDevProvider>> {
     return (await get<Record<string, ModelsDevProvider>>(options?.catalogUrl || CATALOG_URL)) || {};
   } catch {
     checkAbort(discoveryContext.getStore()?.signal);
-    discoveryContext
-      .getStore()
-      ?.warnings.push({
-        code: "CATALOG_UNAVAILABLE",
-        message: "The remote model catalog is unavailable. Using server results and the local Pi catalog.",
-      });
+    discoveryContext.getStore()?.warnings.push({
+      code: "CATALOG_UNAVAILABLE",
+      message: "The remote model catalog is unavailable. Using server results and the local Pi catalog.",
+    });
     return {};
   }
 }
@@ -395,36 +391,122 @@ function getPiRecommendations(): RecommendationProvider[] {
   })));
 }
 
-/** List complete pi-ai model configurations for explicit manual selection. */
-export function listModelPresets(api: ProviderConfig["api"], modelId: string, filter = ""): ModelPreset[] {
-  const query = filter.trim().toLowerCase();
+/** A provider Pi (or the shared model catalog) already knows, with the endpoint it speaks to. */
+export interface KnownProvider {
+  id: string;
+  name: string;
+  baseUrl?: string;
+  apis: string[];
+  /** The methods Pi offers for this provider, so a screen offers only the ones that work. */
+  auth: ("api_key" | "oauth")[];
+}
+
+/**
+ * The endpoints Pi already knows, so a base URL never has to be recalled from memory.
+ * These are Pi's own providers: the shared catalog carries neither endpoints nor API tags.
+ */
+export function knownProviders(): KnownProvider[] {
   return getPiRecommendations()
-    .flatMap((provider) =>
-      provider.models
-        .filter((model) => model.catalogApi === api)
-        .map((model) => {
-          const score = modelPresetScore(modelId, model.id);
-          const { catalogApi: _catalogApi, ...presetModel } = model;
-          return {
-            key: `${provider.id}/${model.id}`,
-            label: `${provider.id} / ${model.id}`,
-            providerId: provider.id,
-            modelId: model.id,
-            model: {
-              ...presetModel,
-              input: [...presetModel.input],
-              cost: cloneModelCost(presetModel.cost),
-              thinkingLevelMap: presetModel.thinkingLevelMap ? { ...presetModel.thinkingLevelMap } : undefined,
-              compat: presetModel.compat ? { ...presetModel.compat } : undefined,
-            },
-            recommended: score >= 700,
-            score,
-          };
-        }),
-    )
-    .filter((preset) => !query || preset.label.toLowerCase().includes(query))
-    .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
-    .map(({ score: _score, ...preset }) => preset);
+    .map((provider) => {
+      const builtin = builtinProviders().find((entry) => entry.id === provider.id);
+      return {
+        id: provider.id,
+        name: provider.name,
+        baseUrl: provider.baseUrl,
+        apis: [
+          ...new Set(provider.models.map((model) => model.catalogApi).filter((api): api is string => !!api)),
+        ].sort(),
+        auth: [
+          ...(builtin?.auth?.apiKey ? (["api_key"] as const) : []),
+          ...(builtin?.auth?.oauth ? (["oauth"] as const) : []),
+        ] as ("api_key" | "oauth")[],
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Provider context used to prefer presets from the same endpoint or identity. */
+export interface PresetProviderContext {
+  id?: string;
+  name?: string;
+  baseUrl?: string;
+}
+
+/** List complete pi-ai model configurations for explicit manual selection. */
+export function listModelPresets(
+  api: ProviderConfig["api"],
+  modelId: string,
+  provider?: PresetProviderContext,
+  filter = "",
+): ModelPreset[] {
+  const query = filter.trim().toLowerCase();
+  return (
+    getPiRecommendations()
+      .flatMap((candidate) =>
+        candidate.models
+          .filter((model) => model.catalogApi === api)
+          .map((model) => {
+            const match = modelPresetScore(modelId, model.id);
+            const affinity = provider ? providerAffinity(provider, candidate) : 0;
+            const { catalogApi: _catalogApi, ...presetModel } = model;
+            return {
+              key: `${candidate.id}/${model.id}`,
+              label: `${candidate.id} / ${model.id}`,
+              providerId: candidate.id,
+              modelId: model.id,
+              model: {
+                ...presetModel,
+                input: [...presetModel.input],
+                cost: cloneModelCost(presetModel.cost),
+                thinkingLevelMap: presetModel.thinkingLevelMap ? { ...presetModel.thinkingLevelMap } : undefined,
+                compat: presetModel.compat ? { ...presetModel.compat } : undefined,
+              },
+              recommended: match >= 700,
+              match,
+              affinity,
+            };
+          }),
+      )
+      .filter((preset) => !query || preset.label.toLowerCase().includes(query))
+      // Same model id first, then the provider that shares the endpoint, id or name.
+      .sort((a, b) => b.match - a.match || b.affinity - a.affinity || a.label.localeCompare(b.label))
+      .map(({ match: _match, affinity: _affinity, ...preset }) => preset)
+  );
+}
+
+/** Mirror of the catalog build rule: endpoint 16, origin 8, provider id 4, provider name 2. */
+function providerAffinity(source: PresetProviderContext, candidate: RecommendationProvider): number {
+  let score = 0;
+  const sourceEndpoint = canonicalEndpoint(source.baseUrl);
+  const candidateEndpoint = canonicalEndpoint(candidate.baseUrl);
+  if (sourceEndpoint && sourceEndpoint === candidateEndpoint) score += 16;
+  const sourceOrigin = canonicalOrigin(source.baseUrl);
+  if (sourceOrigin && sourceOrigin === canonicalOrigin(candidate.baseUrl)) score += 8;
+  if (source.id && norm(source.id) === norm(candidate.id)) score += 4;
+  if (source.name && norm(source.name) === norm(candidate.id)) score += 2;
+  return score;
+}
+
+function canonicalEndpoint(raw?: string): string {
+  if (!raw) return "";
+  try {
+    const url = new URL(raw.trim());
+    if (!url.protocol || !url.host) return "";
+    return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function canonicalOrigin(raw?: string): string {
+  if (!raw) return "";
+  try {
+    const url = new URL(raw.trim());
+    if (!url.protocol || !url.host) return "";
+    return `${url.protocol}//${url.host}`.toLowerCase();
+  } catch {
+    return "";
+  }
 }
 
 function modelPresetScore(actual: string, preset: string): number {

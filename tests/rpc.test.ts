@@ -14,14 +14,14 @@ test("real Pi RPC: direct management, discovery, persistence, model registration
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const port = (server.address() as any).port;
-  const p = await rpc(true, ["-e", path.join(repo, "tests/fixtures/unrelated.ts")]);
+  const p = await rpc(["-e", path.join(repo, "tests/fixtures/unrelated.ts")]);
   try {
-    const description = await p.command("get_extension_operations");
-    assert.equal(description.success, true, JSON.stringify(description));
-    const names = description.data.operations.map((d: any) => d.name);
-    assert(names.includes("provider-manager/provider.create"));
-    assert(names.includes("notes/length"));
-    assert.deepEqual((await p.invoke("notes/length", { text: "中文" })).data, { length: 2 });
+    const operations = await p.catalog();
+    assert(operations.some((d: any) => d.name === "provider.create"));
+    assert(operations.every((d: any) => d.inputSchema?.type === "object"));
+    const commands = await p.command("get_commands");
+    assert(commands.data.commands.some((c: any) => c.name === "model-config"));
+    assert(commands.data.commands.some((c: any) => c.name === "notes-length"));
     const cfg = {
       id: "rpc-fixture",
       api: "openai-completions",
@@ -29,13 +29,13 @@ test("real Pi RPC: direct management, discovery, persistence, model registration
       auth: { mode: "none" },
       models: [],
     };
-    let result = await p.invoke("provider-manager/provider.create", cfg);
+    let result = await p.invoke("provider.create", cfg);
     assert.equal(result.status, "succeeded", JSON.stringify(result));
-    const discovered = await p.invoke("provider-manager/model.discover", { providerId: cfg.id });
+    const discovered = await p.invoke("model.discover", { providerId: cfg.id });
     assert.equal(discovered.status, "succeeded", JSON.stringify(discovered));
     assert(discovered.data.items.some((c: any) => c.model.id === "fixture-native-model-a"));
     assert.equal(requests[0].authorization, undefined);
-    result = await p.invoke("provider-manager/provider.selectModels", {
+    result = await p.invoke("provider.selectModels", {
       providerId: cfg.id,
       expectedRevision: result.data.revision,
       models: [{ id: "fixture-native-model-a", contextWindow: 128000, maxTokens: 4096, input: ["text"] }],
@@ -46,7 +46,7 @@ test("real Pi RPC: direct management, discovery, persistence, model registration
       models.data.models.some((m: any) => m.provider === cfg.id && m.id === "fixture-native-model-a"),
       JSON.stringify(models),
     );
-    const renamed = await p.invoke("provider-manager/provider.update", {
+    const renamed = await p.invoke("provider.update", {
       providerId: cfg.id,
       expectedRevision: result.data.revision,
       set: { id: "rpc-renamed", name: "Rename" },
@@ -56,12 +56,12 @@ test("real Pi RPC: direct management, discovery, persistence, model registration
       (await p.command("set_model", { provider: "rpc-renamed", modelId: "fixture-native-model-a" })).success,
       true,
     );
-    const deletion = await p.invoke("provider-manager/provider.delete", {
+    const deletion = await p.invoke("provider.delete", {
       providerId: "rpc-renamed",
       expectedRevision: renamed.data.revision,
     });
     assert.equal(deletion.error.code, "ACTIVE_MODEL_IN_USE");
-    const other = await p.invoke("provider-manager/provider.create", {
+    const other = await p.invoke("provider.create", {
       ...cfg,
       id: "rpc-other",
       models: [{ id: "other" }],
@@ -70,7 +70,7 @@ test("real Pi RPC: direct management, discovery, persistence, model registration
     assert.equal((await p.command("set_model", { provider: "rpc-other", modelId: "other" })).success, true);
     assert.equal(
       (
-        await p.invoke("provider-manager/provider.delete", {
+        await p.invoke("provider.delete", {
           providerId: "rpc-renamed",
           expectedRevision: other.data.revision,
         })
@@ -95,70 +95,109 @@ test("real Pi RPC: direct management, discovery, persistence, model registration
   }
 });
 
-test("real Pi RPC: task query, cancellation, validation and request id conflict", async () => {
-  let started!: () => void;
-  const ready = new Promise<void>((r) => (started = r));
-  let disconnected = false;
-  const server = http.createServer((req, _res) => {
-    started();
-    req.on("close", () => {
-      disconnected = true;
-    });
+test("a provider Pi ships appears once it is logged in, and adjusting a model changes what Pi serves", async () => {
+  // Pi's own /login wrote this credential; the provider itself is not in models.json.
+  const p = await rpc([], { providers: {} }, "model-config", {
+    anthropic: { type: "api_key", key: "fixture-key" },
   });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const p = await rpc();
   try {
-    const port = (server.address() as any).port;
-    await p.invoke("provider-manager/provider.create", {
-      id: "slow",
-      api: "openai-completions",
-      baseUrl: `http://127.0.0.1:${port}`,
-      auth: { mode: "none" },
-      models: [],
+    const listed = await p.invoke("provider.list", {});
+    const provider = listed.data.items.find((item: any) => item.id === "anthropic");
+    assert.equal(provider?.source, "builtin", JSON.stringify(listed.data.items.map((i: any) => i.id)));
+    assert(provider.modelCount > 0, "Pi's own models are listed");
+
+    const target = provider.models[0];
+    const adjusted = await p.invoke("model.override", {
+      providerId: "anthropic",
+      modelId: target.id,
+      expectedRevision: provider.revision,
+      set: { contextWindow: 424242, maxTokens: 7777 },
     });
-    const start = await p.command("invoke_extension_operation", {
-      operation: "provider-manager/model.discover",
-      arguments: { providerId: "slow" },
-      requestId: "slow1",
+    assert.equal(adjusted.status, "succeeded", JSON.stringify(adjusted.error));
+
+    // Pi's registry is the source of truth: the effective model must show the new values.
+    const after = await p.invoke("provider.get", { providerId: "anthropic" });
+    const effective = after.data.models.find((model: any) => model.id === target.id);
+    assert.equal(effective.contextWindow, 424242);
+    assert.equal(effective.maxTokens, 7777);
+    assert.equal(after.data.models.length, provider.models.length, "no other model changed");
+
+    // The record holds only the patch, so Pi keeps its own endpoint and model list.
+    const record = JSON.parse(fs.readFileSync(path.join(p.root, "agent/models.json"), "utf8")).providers.anthropic;
+    assert.deepEqual(Object.keys(record), ["modelOverrides"]);
+    assert.equal(record.baseUrl, undefined);
+
+    const reverted = await p.invoke("model.override", {
+      providerId: "anthropic",
+      modelId: target.id,
+      expectedRevision: after.data.revision,
+      unset: ["contextWindow", "maxTokens"],
     });
-    await ready;
-    const operationId = start.data.operationId;
-    assert.equal((await p.command("get_extension_operation", { operationId })).data.state, "running");
-    await p.command("cancel_extension_operation", { operationId });
-    const result = await p.wait((e) => e.type === "extension_operation_result" && e.operationId === operationId);
-    assert.equal(result.result.status, "cancelled");
-    assert.equal((await p.command("get_extension_operation", { operationId })).data.result.status, "cancelled");
-    const repeated = await p.command("invoke_extension_operation", {
-      operation: "provider-manager/model.discover",
-      arguments: { providerId: "slow" },
-      requestId: "slow1",
-    });
-    assert.equal(repeated.data.operationId, operationId);
-    const conflict = await p.command("invoke_extension_operation", {
-      operation: "provider-manager/model.discover",
-      arguments: { providerId: "different" },
-      requestId: "slow1",
-    });
-    assert.equal(conflict.errorDetails.code, "CONFLICT");
-    const invalid = await p.invoke("provider-manager/provider.create", { id: "bad", apiKey: "SENTINEL" });
-    assert.equal(invalid.error.code, "VALIDATION_ERROR");
-    assert(!JSON.stringify(p.events).includes("SENTINEL"));
-    for (let i = 0; i < 20 && !disconnected; i++) await new Promise((r) => setTimeout(r, 5));
-    assert(disconnected);
+    assert.equal(reverted.status, "succeeded", JSON.stringify(reverted.error));
+    const restored = await p.invoke("provider.get", { providerId: "anthropic" });
+    assert.equal(restored.data.models.find((model: any) => model.id === target.id).contextWindow, target.contextWindow);
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(p.root, "agent/models.json"), "utf8")).providers.anthropic,
+      undefined,
+    );
+    assert.equal(p.stderr, "");
   } finally {
     await p.close();
-    server.closeAllConnections();
-    await new Promise<void>((r) => server.close(() => r()));
   }
 });
 
-test("unmodified Pi RPC does not pretend to implement operation registration", async () => {
-  const p = await rpc(false);
+test("a credential for a provider Pi ships is written where Pi reads it", async () => {
+  // Pi's own /login owns the OAuth flow; an API key for a built-in lands in the same slot.
+  const p = await rpc([], { providers: {} }, "model-config", {
+    anthropic: { type: "api_key", key: "old-key" },
+  });
+  try {
+    const listed = await p.invoke("provider.list", {});
+    const provider = listed.data.items.find((item: any) => item.id === "anthropic");
+    assert.equal(provider.source, "builtin");
+    assert.equal(provider.auth.status, "configured");
+
+    const rotated = await p.invoke("auth.configure", {
+      providerId: "anthropic",
+      expectedRevision: provider.revision,
+      value: "rotated-key",
+    });
+    assert.equal(rotated.status, "succeeded", JSON.stringify(rotated.error));
+
+    // The credential stays in Pi's own store, keyed by the provider id, and no record is created.
+    const auth = JSON.parse(fs.readFileSync(path.join(p.root, "agent/auth.json"), "utf8"));
+    assert.equal(auth.anthropic.key, "rotated-key");
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(p.root, "agent/models.json"), "utf8")).providers.anthropic,
+      undefined,
+    );
+    const after = await p.invoke("provider.get", { providerId: "anthropic" });
+    assert.equal(after.data.auth.status, "configured");
+
+    const cleared = await p.invoke("auth.clear", {
+      providerId: "anthropic",
+      expectedRevision: after.data.revision,
+    });
+    assert.equal(cleared.status, "succeeded", JSON.stringify(cleared.error));
+    assert.equal(JSON.parse(fs.readFileSync(path.join(p.root, "agent/auth.json"), "utf8")).anthropic, undefined);
+    // Without a credential the provider drops out of the list again.
+    const final = await p.invoke("provider.list", {});
+    assert(!final.data.items.some((item: any) => item.id === "anthropic"));
+    assert.equal(p.stderr, "");
+  } finally {
+    await p.close();
+  }
+});
+
+test("Pi RPC is the only transport: no custom command exists", async () => {
+  const p = await rpc();
   try {
     const commands = await p.command("get_commands");
-    assert(commands.data.commands.some((c: any) => c.name === "provider-setup"));
+    assert(commands.data.commands.some((c: any) => c.name === "model-config"));
     const missing = await p.command("get_extension_operations");
     assert.equal(missing.success, false);
+    const unknown = await p.command("invoke_extension_operation", { operation: "x", arguments: {}, requestId: "x" });
+    assert.equal(unknown.success, false);
   } finally {
     await p.close();
   }
@@ -187,7 +226,7 @@ test("real Pi resolves newly saved credentials for HTTP without exposing keys or
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const p = await rpc();
   try {
-    let created = await p.invoke("provider-manager/provider.create", {
+    let created = await p.invoke("provider.create", {
       id: "secrets",
       api: "openai-completions",
       baseUrl: `http://127.0.0.1:${(server.address() as any).port}/v1`,
@@ -196,7 +235,7 @@ test("real Pi resolves newly saved credentials for HTTP without exposing keys or
     });
     assert.equal(
       (
-        await p.invoke("provider-manager/auth.configure", {
+        await p.invoke("auth.configure", {
           providerId: "secrets",
           expectedRevision: created.data.revision,
           value: "SENTINEL_API_KEY",
@@ -206,7 +245,7 @@ test("real Pi resolves newly saved credentials for HTTP without exposing keys or
     );
     assert.equal(
       (
-        await p.invoke("provider-manager/headers.set", {
+        await p.invoke("headers.set", {
           providerId: "secrets",
           expectedRevision: created.data.revision,
           name: "X-Secret",
@@ -215,7 +254,7 @@ test("real Pi resolves newly saved credentials for HTTP without exposing keys or
       ).status,
       "succeeded",
     );
-    assert.equal((await p.invoke("provider-manager/model.discover", { providerId: "secrets" })).status, "succeeded");
+    assert.equal((await p.invoke("model.discover", { providerId: "secrets" })).status, "succeeded");
     assert.equal(requests[0].authorization, "Bearer SENTINEL_API_KEY");
     assert.equal(requests[0]["x-secret"], "SENTINEL_HEADER");
     const models = await p.command("get_available_models");
@@ -253,9 +292,9 @@ test("existing Pi compat metadata survives startup and provider edits", async ()
       },
     },
   };
-  const p = await rpc(true, [], config);
+  const p = await rpc([], config);
   try {
-    const result = await p.invoke("provider-manager/provider.get", { providerId: "existing" });
+    const result = await p.invoke("provider.get", { providerId: "existing" });
     assert.equal(result.status, "succeeded", JSON.stringify(result));
     assert.deepEqual(result.data.compat, compat);
     assert.deepEqual(result.data.models[0].compat, compat);
@@ -263,7 +302,7 @@ test("existing Pi compat metadata survives startup and provider edits", async ()
     const model = models.data.models.find((m: any) => m.provider === "existing" && m.id === "fixture");
     assert(model, JSON.stringify(models));
     assert.deepEqual(model.compat, compat);
-    const updated = await p.invoke("provider-manager/provider.update", {
+    const updated = await p.invoke("provider.update", {
       providerId: "existing",
       expectedRevision: result.data.revision,
       set: { name: "Edited" },

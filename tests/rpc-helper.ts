@@ -8,15 +8,29 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 export const repo = path.resolve(import.meta.dirname, "..");
-export async function rpc(bridge = true, extra: string[] = [], initialConfig?: unknown) {
+export const resultEntryType = "provider-manager/result";
+
+/**
+ * Runs unmodified Pi RPC. Management goes through Pi's own protocol only:
+ * `get_commands` to discover, `prompt` to run `<command> <operation> <json>`,
+ * `extension_ui_response` to answer prompts, and `get_entries` to read the result entry.
+ * Completion is signalled by the command's notification, so no polling races a dialog.
+ */
+export async function rpc(
+  extra: string[] = [],
+  initialConfig?: unknown,
+  commandName = "model-config",
+  initialAuth?: unknown,
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "provider-rpc-"));
   for (const dir of ["home", "agent", "cwd"]) fs.mkdirSync(path.join(root, dir));
   if (initialConfig !== undefined)
     fs.writeFileSync(path.join(root, "agent/models.json"), JSON.stringify(initialConfig));
-  const cli = bridge ? path.join(repo, "bin/pi-extension-rpc.mjs") : piCli;
+  if (initialAuth !== undefined) fs.writeFileSync(path.join(root, "agent/auth.json"), JSON.stringify(initialAuth));
   const args = [
-    cli,
-    ...(!bridge ? ["--mode", "rpc"] : []),
+    piCli,
+    "--mode",
+    "rpc",
     "--no-session",
     "--no-extensions",
     "--no-skills",
@@ -78,16 +92,84 @@ export async function rpc(bridge = true, extra: string[] = [], initialConfig?: u
     send({ id, type, ...args });
     return wait((e) => e.id === id && e.type === "response");
   }
-  async function invoke(operation: string, args: any) {
-    const response = await command("invoke_extension_operation", {
-      operation,
-      arguments: args,
-      requestId: `request${++serial}`,
-    });
-    if (!response.success) throw new Error(JSON.stringify(response));
-    const id = response.data.operationId;
-    return (await wait((e) => e.type === "extension_operation_result" && e.operationId === id)).result;
+  const notifyFor = (label: string) =>
+    events.find((e) => e.type === "extension_ui_request" && e.method === "notify" && e.message?.startsWith(label));
+  const leaf = async () => (await command("get_entries")).data?.leafId ?? null;
+  async function readEntry<T>(find: (entry: any) => T | undefined, since: string | null = null): Promise<T> {
+    const entries = await command("get_entries", since ? { since } : {});
+    const hit = (entries.data?.entries ?? []).map(find).find(Boolean);
+    if (!hit) throw new Error(`No matching session entry: ${error}`);
+    return hit as T;
   }
+  async function catalog(timeout = 20000) {
+    const since = await leaf();
+    await command("prompt", { message: `/${commandName} help` });
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const hit = events.find(
+        (e) => e.type === "extension_ui_request" && e.method === "notify" && /read entry ".+"\.$/.test(e.message ?? ""),
+      );
+      if (hit) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return readEntry(
+      (entry: any) =>
+        entry.type === "custom" && entry.customType === resultEntryType && entry.data?.kind === "catalog"
+          ? entry.data.operations
+          : undefined,
+      since,
+    );
+  }
+  /**
+   * Runs one operation. Prompts are answered from `answers` in order; an undefined answer
+   * cancels that prompt. Returns the result and how many prompts were shown.
+   */
+  async function run(operation: string, args: any, answers: (string | undefined)[] = []) {
+    const pending = [...answers];
+    const since = await leaf();
+    // The prompt response only arrives after the command finishes, so start it and keep
+    // answering extension UI requests meanwhile instead of awaiting it first.
+    const finished = command("prompt", {
+      message: `/${commandName} ${operation} ${JSON.stringify(args ?? {})}`,
+    });
+    let answered = 0;
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      const prompt = events
+        .filter((e) => e.type === "extension_ui_request" && ["select", "input", "confirm"].includes(e.method))
+        .at(answered);
+      if (prompt) {
+        answered++;
+        const value = pending.shift();
+        send(
+          value === undefined
+            ? { type: "extension_ui_response", id: prompt.id, cancelled: true }
+            : prompt.method === "confirm"
+              ? { type: "extension_ui_response", id: prompt.id, confirmed: value === "yes" }
+              : { type: "extension_ui_response", id: prompt.id, value },
+        );
+        continue;
+      }
+      if (notifyFor(`${operation}: `)) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const response = await finished;
+    if (!response.success) throw new Error(JSON.stringify(response));
+    const result = await readEntry(
+      (entry: any) =>
+        entry.type === "custom" &&
+        entry.customType === resultEntryType &&
+        entry.data?.kind === "result" &&
+        entry.data.operation === operation
+          ? entry.data.result
+          : undefined,
+      since,
+    );
+    return { result, prompts: answered };
+  }
+  const invoke = async (operation: string, args: any) => (await run(operation, args)).result;
+  const invokeWithAnswers = (operation: string, args: any, answers: (string | undefined)[]) =>
+    run(operation, args, answers);
   return {
     root,
     child,
@@ -95,7 +177,9 @@ export async function rpc(bridge = true, extra: string[] = [], initialConfig?: u
     send,
     wait,
     command,
+    catalog,
     invoke,
+    invokeWithAnswers,
     get stderr() {
       return error;
     },

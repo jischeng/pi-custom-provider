@@ -52,96 +52,74 @@ def edit(value,label): act(['\x01','\x0b',value,'\r'],label)
 def open_provider(name,has_models=True):
  choose(name,'navigate')
 def manual_model():
- choose('Add model','Back to models')
+ choose('Add model','Enter model manually')
  choose('Enter model manually','Model name')
 try:
  wait('pi v')
- act(['/provider-setup','\r'],'Create provider')
+ act(['/model-config','\r'],'Create provider')
+ # Create a provider: API type first, then the endpoints Pi knows for it (or a base URL of your own).
  pick(0,'API type')
- pick(options['apiIndex'],'Base URL')
+ pick(options['apiIndex'],'Enter a base URL myself')
+ choose('Enter a base URL myself','Base URL')
  input(f'http://127.0.0.1:{server.server_port}/v1','Provider ID')
  input('pty-provider','Authentication method')
- pick(0,'No models added.')
- # Add discovers and opens selection; manual creation is a secondary action.
- manual_model()
- choose('Model ID','external editor')
+ pick(0,'Enter model manually')
+ # A new provider discovers immediately; the selection screen is already open.
+ choose('Enter model manually','Model name')
+ choose('Model ID','Enter to submit')
  edit('cancelled-model','Type to search')
- choose('Cancel','Back to models')
- act(['\x1b'],'No models added.')
+ choose('Cancel','Enter model manually')
+ act(['\x1b'],'Provider: pty-provider')
  manual_model()
- choose('Model ID','external editor')
+ choose('Model ID','Enter to submit')
  edit('pty-model','Type to search')
- choose('Model name','external editor')
+ choose('Model name','Enter to submit')
  edit('PTY model','Type to search')
- choose('Context window','external editor')
+ choose('Context window','Enter to submit')
  edit('64000','Type to search')
- choose('Add model','Back to models')
- choose('Back to models','Actions')
- choose('Save changes','Save configuration')
- pick(0,'Create provider')
+ choose('Add model','Enter model manually')
+ act(['\x1b'],'Provider: pty-provider')
+ # Closing the selection screen auto-saves.
  assert config()['providers']['pty-provider']['models']==[{'id':'pty-model','name':'PTY model','contextWindow':64000}]
- open_provider('pty-provider')
- # Models and actions are visible together. No Provider actions submenu exists.
+ # We are back on the provider page. No Provider actions submenu exists.
  page=ansi.sub('',output)
- assert 'Provider: pty-provider' in page and 'Models' in page and 'Actions' in page
+ assert 'Provider: pty-provider' in page and 'Models' in page
  assert 'Provider actions' not in page
- # Down crosses directly from the only model into Add model, without Tab.
- act(['\x1b[B','\r'],'Back to models')
- act(['\x1b'],'Actions')
- # Up crosses directly back from Add model to the existing model.
- act(['\x1b[A','\r'],'Model: pty-model')
- choose('Context window','external editor')
- edit('96000','Type to search')
- choose('Context window','external editor')
- wait('96000')
- act(['\x03'],'Type to search')
- choose('Supports reasoning','Yes')
- choose('Compatibility settings','Apply Compatibility settings')
- choose('Advanced JSON','external editor')
- edit('invalid-json','Invalid JSON')
- pick(0,'Advanced JSON')
- act(['\x03'],'Compatibility settings')
- choose('Back to provider','Actions')
- choose('Save changes','Save configuration')
- pick(0,'Create provider')
+ choose('Add model','Enter model manually')
+ act(['\x1b'],'Provider: pty-provider')
+ choose('pty-model','Model: pty-model')
+ # The model form groups fields; a boolean row toggles in place.
+ choose('Supports reasoning','Supports reasoning')
+ choose('Context window','Context window')
+ edit('96000','96000')
+ # compat only lists configured keys; add one explicitly.
+ # The compat field list is rendered by the panel itself, so wait for a value only it shows.
+ choose('Add compat field','cacheControlFormat')
+ pick(9,'supportsStore'.ljust(24)+'Yes')
+ act(['\x1b'],'Provider: pty-provider')
+ # Closing the model screen auto-saves.
  model=config()['providers']['pty-provider']['models'][0]
  assert model['contextWindow']==96000 and model['reasoning'] is True
- open_provider('pty-provider')
- choose('Provider settings','Provider ID')
- choose('Provider ID','external editor')
- edit('pty-renamed','Type to search')
- choose('Back to models','Actions')
- choose('Save changes','Save configuration')
- pick(0,'Create provider')
+ assert model['compat']=={'supportsStore':True}
+ # The provider fields are on the provider page; editing one auto-saves immediately.
+ choose('Provider ID','enter submit')
+ edit('pty-renamed','Provider: pty-renamed')
  assert 'pty-provider' not in config()['providers']
  assert 'pty-renamed' in config()['providers']
- before=config()
- open_provider('pty-renamed')
- choose('Provider settings','Provider ID')
- choose('Display name','external editor')
- edit('discard-me','Type to search')
- choose('Back to models','Actions')
- choose('Discard changes','Create provider')
- assert config()==before
- open_provider('pty-renamed')
- choose('Add model','Back to models')
- choose('pty-model','No')
- choose('Back to models','No models added.')
- choose('Save changes','Save configuration')
- pick(0,'Create provider')
+ choose('Add model','Enter model manually')
+ choose('pty-model','Remove from provider')
+ act(['\r'],'pty-model'.ljust(36)+'No')
+ act(['\x1b'],'Provider: pty-renamed')
+ # Closing the selection screen auto-saves the empty model list.
  assert config()['providers']['pty-renamed']['models']==[]
- open_provider('pty-renamed',False)
  choose('Delete provider','Existing credentials will be retained')
- pick(1,'No models added.')
- choose('Discard changes','Create provider')
+ pick(1,'Provider: pty-renamed')
  assert 'pty-renamed' in config()['providers']
- open_provider('pty-renamed',False)
  choose('Delete provider','Existing credentials will be retained')
  pick(0,'Create provider')
  assert config()['providers']=={}
  assert '/v1/models' in requests and '/catalog' in requests
- print('Native Pi PTY: grouped provider window, nested model dialogs, complete creation, cancellation, edit, save, rename, discard and deletion passed')
-
+ print('Native Pi PTY: native dialogs, auto-save, complete creation, cancellation, edit, rename and deletion passed')
 finally:
  server.shutdown();server.server_close()
  process.terminate()

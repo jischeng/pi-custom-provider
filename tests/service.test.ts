@@ -4,8 +4,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ProviderService } from "../src/domain/service";
-import { OperationRegistry } from "../src/operations/registry";
-import { Authentication } from "../src/oauth";
+import { runOperation } from "../src/operations/runner";
+import type { Caller, Interaction } from "../src/operations/types";
+import { Authentication } from "../src/extension/adapters/authentication";
+import { listModelPresets } from "../src/extension/adapters/discovery";
 
 const values = (id = "fixture") => ({
   id,
@@ -17,7 +19,6 @@ const values = (id = "fixture") => ({
 });
 function fixture(options: any = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "provider-service-"));
-  const events: any[] = [];
   let synced: any,
     active: any,
     busy = false,
@@ -37,16 +38,27 @@ function fixture(options: any = {}) {
     discovery: { catalogUrl: null, ...options.discovery },
     authentication: options.authFactory?.(directory),
   });
-  const registry = new OperationRegistry((e) => events.push(e));
-  registry.register("provider-manager", service.definitions());
-  const run = (name: string, args: any, caller: any = "user_client", requestId?: string) =>
-    registry.invoke(`provider-manager/${name}`, args, caller, requestId).done;
+  const definitions = service.definitions();
+  const events: Interaction[] = [];
+  let answer: (request: Interaction) => Promise<string> = async () => {
+    throw new Error("Unexpected prompt");
+  };
+  const run = (name: string, args: any, caller: Caller = "user_client", signal?: AbortSignal) =>
+    runOperation(definitions, name, args, {
+      caller,
+      signal: signal ?? new AbortController().signal,
+      prompt: (request) => answer(request),
+      notify: (request) => events.push(request),
+      progress: () => {},
+    });
   return {
     directory,
     service,
-    registry,
     events,
     run,
+    onPrompt: (handler: (request: Interaction) => Promise<string>) => {
+      answer = handler;
+    },
     get synced() {
       return synced;
     },
@@ -57,7 +69,6 @@ function fixture(options: any = {}) {
       failSync = true;
     },
     dispose: async () => {
-      await registry.dispose();
       fs.rmSync(directory, { recursive: true, force: true });
     },
   };
@@ -185,14 +196,10 @@ test("credentials and header values are absent from every public projection, des
     assert.equal(p.auth.status, "configured");
     assert.equal(p.headers[0].hasValue, true);
     assert(!JSON.stringify(f.events).includes("SENTINEL"));
-    assert.throws(
-      () =>
-        f.registry.invoke(
-          "provider-manager/auth.configure",
-          { providerId: p.id, expectedRevision: p.revision, value: "x" },
-          "model_tool",
-        ),
-      /user/,
+    assert.equal(
+      (await f.run("auth.configure", { providerId: p.id, expectedRevision: p.revision, value: "x" }, "model_tool"))
+        .error?.code,
+      "USER_ACTION_REQUIRED",
     );
     let r = await f.run("provider.update", { providerId: p.id, expectedRevision: p.revision, set: { id: "new-id" } });
     assert.equal(r.data.auth.status, "configured");
@@ -230,10 +237,16 @@ test("discovery cancellation aborts HTTP and never updates a discarded or newer 
   });
   try {
     const d = (await f.run("draft.create", values())).data;
-    const task = f.registry.invoke("provider-manager/model.discover", { draftId: d.draftId, revision: d.revision });
+    const controller = new AbortController();
+    const task = f.run(
+      "model.discover",
+      { draftId: d.draftId, revision: d.revision },
+      "user_client",
+      controller.signal,
+    );
     await ready;
-    f.registry.cancel(task.snapshot.operationId);
-    assert.equal((await task.done).status, "cancelled");
+    controller.abort();
+    assert.equal((await task).status, "cancelled");
     assert(aborted);
     assert.equal((await f.run("draft.get", { draftId: d.draftId })).data.revision, d.revision);
     assert(!fs.existsSync(path.join(f.directory, "models.json")));
@@ -241,16 +254,10 @@ test("discovery cancellation aborts HTTP and never updates a discarded or newer 
     await f.dispose();
   }
 });
-test("request IDs deduplicate writes and sync failure reports committed effects", async () => {
+test("a sync failure after a committed write reports committed effects", async () => {
   const f = fixture();
   try {
-    const r = await f.run("provider.create", values(), "user_client", "request1");
-    const repeated = await f.run("provider.create", values(), "user_client", "request1");
-    assert.equal(r.operationId, repeated.operationId);
-    assert.throws(
-      () => f.registry.invoke("provider-manager/provider.create", values("other"), "user_client", "request1"),
-      /requestId/,
-    );
+    const r = await f.run("provider.create", values());
     f.failSync();
     const failed = await f.run("provider.update", {
       providerId: "fixture",
@@ -318,23 +325,20 @@ test("OAuth returns typed user actions, handles callback cancellation and stores
         auth: { mode: "oauth", methodId: "openai-codex" },
       })
     ).data;
-    const task = f.registry.invoke("provider-manager/auth.begin", { providerId: p.id, expectedRevision: p.revision });
-    for (const value of ["device", "fixture-code"]) {
-      let event: any;
-      for (let i = 0; i < 100; i++) {
-        event = f.events.find(
-          (e) =>
-            e.operationId === task.snapshot.operationId &&
-            e.requiresResponse &&
-            !f.events.some((x) => x.type === "extension_interaction_end" && x.interactionId === e.interactionId),
-        );
-        if (event) break;
-        await new Promise((r) => setTimeout(r, 5));
-      }
-      assert(event);
-      f.registry.respond(task.snapshot.operationId, event.interactionId, event.revision, value);
-    }
-    assert.equal((await task.done).status, "succeeded");
+    const answers = ["device", "fixture-code"];
+    const asked: Interaction[] = [];
+    f.onPrompt(async (request) => {
+      asked.push(request);
+      return answers.shift()!;
+    });
+    const result = await f.run("auth.begin", { providerId: p.id, expectedRevision: p.revision });
+    assert.equal(result.status, "succeeded", JSON.stringify(result.error));
+    assert.equal(asked.length, 2);
+    assert.equal(asked[0].kind, "select");
+    assert.deepEqual(
+      asked[0].options?.map((option) => option.id),
+      ["device"],
+    );
     assert(!JSON.stringify(f.events).includes("SENTINEL"));
     const stored = f.service.store.read().config.providers.fixture;
     assert.equal((await f.service.auth.resolve("fixture", stored)).auth.apiKey, "SENTINEL_ACCESS");
@@ -394,6 +398,17 @@ test("clearing legacy credentials removes the fallback; model URL edits detach a
   }
 });
 
+test("model presets prefer the provider that shares the endpoint", () => {
+  const ranked = listModelPresets("openai-completions", "glm-5.3", {
+    id: "zai-zhoujie",
+    baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+  });
+  assert.equal(ranked[0].providerId, "zai-coding-cn");
+  assert(ranked[0].recommended);
+  // Without the provider context the same model id sorts alphabetically instead.
+  assert.notEqual(listModelPresets("openai-completions", "glm-5.3")[0].providerId, "zai-coding-cn");
+});
+
 test("Pi model presets satisfy the public model contract", async () => {
   const f = fixture();
   try {
@@ -411,6 +426,224 @@ test("Pi model presets satisfy the public model contract", async () => {
         cursor = result.data.nextCursor;
       } while (cursor);
     }
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("applying a model preset enriches metadata while preserving the model ID", async () => {
+  const f = fixture();
+  try {
+    await f.run("provider.create", { ...values(), models: [{ id: "gpt-4o", input: ["text"] }] });
+    const draft = (await f.run("draft.open", { providerId: "fixture" })).data;
+    const presets = (await f.run("catalog.presets", { api: "openai-completions", modelId: "gpt-4o", limit: 5 })).data;
+    assert(presets.items.length > 0);
+    const applied = (
+      await f.run("draft.applyPreset", {
+        draftId: draft.draftId,
+        revision: draft.revision,
+        modelId: "gpt-4o",
+        presetId: presets.items[0].id,
+      })
+    ).data;
+    const model = applied.values.models.find((m: any) => m.id === "gpt-4o");
+    assert(model);
+    assert.equal(model.id, "gpt-4o");
+    assert(model.contextWindow > 0);
+    assert(model.maxTokens > 0);
+    assert(!applied.values.models.some((m: any) => m.id !== "gpt-4o"));
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("model recommendation enriches a manual model ID from the local catalog", async () => {
+  const f = fixture();
+  try {
+    await f.run("provider.create", { ...values(), models: [] });
+    const result = await f.run("model.recommend", { providerId: "fixture", modelId: "gpt-4o" });
+    assert.equal(result.status, "succeeded", JSON.stringify(result.error));
+    assert.equal(result.data.model.id, "gpt-4o");
+    assert.equal(result.data.source, "catalog");
+    assert(result.data.model.contextWindow > 0);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("creating a draft with an API key stores it for discovery and removes it on discard", async () => {
+  const authHeaders: string[] = [];
+  const f = fixture({
+    discovery: {
+      fetch: async (_url: string, options: any) => {
+        authHeaders.push(options?.headers?.Authorization || "");
+        return new Response(JSON.stringify({ data: [{ id: "m-from-api" }] }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+    },
+  });
+  try {
+    const draft = (
+      await f.run("draft.create", {
+        id: "keyed",
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:18080/v1",
+        auth: { mode: "api_key" },
+        models: [],
+        apiKey: "SENTINEL-KEY",
+      })
+    ).data;
+    assert.equal(draft.values.auth.mode, "api_key");
+    assert(!JSON.stringify(f.events).includes("SENTINEL-KEY"));
+    assert(!JSON.stringify(draft).includes("SENTINEL-KEY"));
+    const credentialFile = path.join(f.directory, "auth.json");
+    assert(JSON.stringify(JSON.parse(fs.readFileSync(credentialFile, "utf8"))).includes("SENTINEL-KEY"));
+    const discovered = await f.run("model.discover", { draftId: draft.draftId, revision: draft.revision });
+    assert.equal(discovered.status, "succeeded", JSON.stringify(discovered.error));
+    assert(authHeaders.includes("Bearer SENTINEL-KEY"));
+    await f.run("draft.discard", { draftId: draft.draftId, revision: discovered.data.revision });
+    assert(!fs.readFileSync(credentialFile, "utf8").includes("SENTINEL-KEY"));
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("creating a draft with OAuth JSON stores the credential and discard removes it", async () => {
+  const f = fixture({
+    authFactory: (directory: string) =>
+      new Authentication(
+        directory,
+        () =>
+          [
+            {
+              id: "openai-codex",
+              name: "Fake",
+              getModels: () => [],
+              stream: () => undefined,
+              streamSimple: () => undefined,
+              auth: {
+                oauth: {
+                  name: "Fake",
+                  login: async () => ({
+                    type: "oauth",
+                    access: "SENTINEL_ACCESS",
+                    refresh: "SENTINEL_REFRESH",
+                    expires: Date.now() + 3600000,
+                  }),
+                  refresh: async (c: any) => c,
+                  toAuth: async (c: any) => ({ apiKey: c.access }),
+                },
+              },
+            },
+          ] as any,
+      ),
+  });
+  try {
+    const draft = (
+      await f.run("draft.create", {
+        id: "oauth-draft",
+        api: "openai-codex-responses",
+        baseUrl: "https://fixture.test",
+        auth: { mode: "oauth", methodId: "openai-codex" },
+        models: [],
+        oauthJson: JSON.stringify({
+          access: "SENTINEL_ACCESS",
+          refresh: "SENTINEL_REFRESH",
+          expires: Date.now() + 3600000,
+        }),
+      })
+    ).data;
+    assert(!JSON.stringify(draft).includes("SENTINEL_ACCESS"));
+    const credentialFile = path.join(f.directory, "auth.json");
+    assert(fs.readFileSync(credentialFile, "utf8").includes("SENTINEL_ACCESS"));
+    await f.run("draft.discard", { draftId: draft.draftId, revision: draft.revision });
+    assert(!fs.readFileSync(credentialFile, "utf8").includes("SENTINEL_ACCESS"));
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("draft.login completes OAuth before the provider is saved", async () => {
+  const f = fixture({
+    authFactory: (directory: string) =>
+      new Authentication(
+        directory,
+        () =>
+          [
+            {
+              id: "openai-codex",
+              name: "Fake",
+              getModels: () => [],
+              stream: () => undefined,
+              streamSimple: () => undefined,
+              auth: {
+                oauth: {
+                  name: "Fake",
+                  login: async (interaction: any) => {
+                    await interaction.prompt({
+                      type: "select",
+                      message: "Method",
+                      options: [{ id: "device", label: "Device" }],
+                    });
+                    return {
+                      type: "oauth",
+                      access: "SENTINEL_ACCESS",
+                      refresh: "SENTINEL_REFRESH",
+                      expires: Date.now() + 3600000,
+                    };
+                  },
+                  refresh: async (c: any) => c,
+                  toAuth: async (c: any) => ({ apiKey: c.access }),
+                },
+              },
+            },
+          ] as any,
+      ),
+  });
+  try {
+    const draft = (
+      await f.run("draft.create", {
+        id: "oauth-login",
+        api: "openai-codex-responses",
+        baseUrl: "https://fixture.test",
+        auth: { mode: "oauth", methodId: "openai-codex" },
+        models: [],
+      })
+    ).data;
+    f.onPrompt(async () => "device");
+    const result = await f.run("draft.login", { draftId: draft.draftId, revision: draft.revision });
+    assert.equal(result.status, "succeeded", JSON.stringify(result.error));
+    assert(!JSON.stringify(f.events).includes("SENTINEL_ACCESS"));
+    assert(fs.readFileSync(path.join(f.directory, "auth.json"), "utf8").includes("SENTINEL_ACCESS"));
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("every operation exposes an object input schema so agent tools pass provider validation", async () => {
+  const f = fixture();
+  try {
+    const definitions = f.service.definitions();
+    assert(definitions.length > 0);
+    for (const definition of definitions)
+      assert.equal(
+        (definition.inputSchema as any).type,
+        "object",
+        `${definition.name} must declare an object input schema`,
+      );
+    const discover = definitions.find((d) => d.name === "model.discover")!;
+    assert.deepEqual(Object.keys((discover.inputSchema as any).properties ?? {}).sort(), [
+      "draftId",
+      "providerId",
+      "revision",
+    ]);
+    const missing = await f.run("model.discover", {});
+    assert.equal(missing.error?.code, "VALIDATION_ERROR");
+    const incomplete = await f.run("model.discover", { draftId: "draft", revision: undefined });
+    assert.equal(incomplete.error?.code, "VALIDATION_ERROR");
+    const conflicting = await f.run("model.discover", { providerId: "fixture", draftId: "draft", revision: 1 });
+    assert.equal(conflicting.error?.code, "VALIDATION_ERROR");
   } finally {
     await f.dispose();
   }
@@ -696,6 +929,98 @@ test("discovery accepts runtime-advertised Baseten metadata without dropping the
     assert.equal(result.status, "succeeded", JSON.stringify(result.error));
     assert(result.data.candidates.some((candidate: any) => candidate.model.compat?.thinkingFormat === "baseten"));
     assert.deepEqual(result.data.selectedModelIds, ["m1"]);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("a provider Pi ships is listed once it is usable, and adjusting a model patches only it", async () => {
+  const f = fixture();
+  try {
+    // Nothing is stored for Pi's own providers, so an unusable one stays out of the list.
+    const before = await f.run("provider.list", {});
+    assert(before.data.items.every((item: any) => item.source === "configured"));
+    assert(!before.data.items.some((item: any) => item.id === "anthropic"));
+
+    const view = await f.run("provider.get", { providerId: "anthropic" });
+    assert.equal(view.data.source, "builtin");
+    assert(view.data.models.length > 0, "Pi's own models are shown");
+    assert(view.data.baseUrl);
+
+    const target = view.data.models[0];
+    const patched = await f.run("model.override", {
+      providerId: "anthropic",
+      modelId: target.id,
+      expectedRevision: view.data.revision,
+      set: { contextWindow: 123456, compat: { supportsTemperature: false } },
+    });
+    assert.equal(patched.status, "succeeded", JSON.stringify(patched.error));
+    assert.deepEqual(patched.data.overriddenModelIds, [target.id]);
+    // Without a bound runtime the patch is reported as stored; Pi's registry supplies the
+    // effective value (see the adapter test below).
+    assert.deepEqual(patched.data.modelOverrides[target.id], {
+      contextWindow: 123456,
+      compat: { supportsTemperature: false },
+    });
+
+    // The record holds the patch and nothing else, so Pi keeps its own endpoint and models.
+    const record = JSON.parse(fs.readFileSync(path.join(f.directory, "models.json"), "utf8")).providers.anthropic;
+    assert.deepEqual(Object.keys(record), ["modelOverrides"]);
+    assert.equal(record.modelOverrides[target.id].contextWindow, 123456);
+    assert(record.modelOverrides[target.id].baseUrl === undefined);
+
+    // Other models of the same provider are untouched, and clearing the last patch removes the record.
+    assert.equal(patched.data.models.length, view.data.models.length);
+    const cleared = await f.run("model.override", {
+      providerId: "anthropic",
+      modelId: target.id,
+      expectedRevision: patched.data.revision,
+      unset: ["contextWindow", "compat"],
+    });
+    assert.equal(cleared.status, "succeeded", JSON.stringify(cleared.error));
+    assert.deepEqual(cleared.data.overriddenModelIds, []);
+    assert.deepEqual(cleared.data.modelOverrides, {});
+    assert(
+      JSON.parse(fs.readFileSync(path.join(f.directory, "models.json"), "utf8")).providers.anthropic === undefined,
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("a model override refuses a provider or model Pi does not ship", async () => {
+  const f = fixture();
+  try {
+    const revision = (await f.run("provider.list", {})).data.revision;
+    assert.equal(
+      (await f.run("model.override", { providerId: "nope", modelId: "x", expectedRevision: revision })).error?.code,
+      "VALIDATION_ERROR",
+    );
+    const view = await f.run("provider.get", { providerId: "anthropic" });
+    assert.equal(
+      (
+        await f.run("model.override", {
+          providerId: "anthropic",
+          modelId: "not-a-model",
+          expectedRevision: view.data.revision,
+        })
+      ).error?.code,
+      "NOT_FOUND",
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("a built-in provider reports the models its runtime serves, patches included", async () => {
+  const f = fixture();
+  try {
+    // The runtime is the source of truth for effective values: it already applied every layer.
+    const effective = [{ id: "m", api: "anthropic-messages", contextWindow: 4242, name: "Patched" }];
+    (f.service as any).options.runtime.modelsOf = () => effective;
+    const view = await f.run("provider.get", { providerId: "anthropic" });
+    assert.deepEqual(view.data.models, effective);
+    assert.equal(view.data.source, "builtin");
   } finally {
     await f.dispose();
   }

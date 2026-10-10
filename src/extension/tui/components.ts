@@ -7,6 +7,7 @@ import {
 import {
   Container,
   Box,
+  Input,
   Spacer,
   Text,
   SettingsList,
@@ -15,32 +16,13 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import { booleanChoices, booleanLabel, formatValue } from "./format";
+import type { Action, Field, PanelHeading } from "./types";
+import { providerPanel } from "./provider-panel";
 
 // No rendering or keyboard implementation: all components below are provided by Pi.
-export type Field = {
-  id: string;
-  label: string;
-  description?: string;
-  schema: any;
-  value: any;
-  allowDefault?: boolean;
-};
-export type Action = { id: string; label: string; value?: string; description?: string };
-export type PanelHeading = { context?: string; title: string; description?: string };
 const cleared = Symbol("cleared");
 export { cleared };
-export const displayValue = (value: any): string =>
-  value === undefined
-    ? "Default"
-    : typeof value === "boolean"
-      ? value
-        ? "Yes"
-        : "No"
-      : Array.isArray(value)
-        ? value.join(", ") || "None"
-        : value && typeof value === "object"
-          ? `${Object.keys(value).length} settings`
-          : String(value);
 
 function nativeField(
   field: Field,
@@ -53,9 +35,9 @@ function nativeField(
     id: field.id,
     label: field.label,
     description: field.description,
-    currentValue: displayValue(field.value),
+    currentValue: field.schema.type === "boolean" ? booleanLabel(field.value) : formatValue(field.value),
     ...(field.schema.type === "boolean"
-      ? { values: field.allowDefault === false ? ["No", "Yes"] : ["Default", "Yes", "No"] }
+      ? { values: field.allowDefault === false ? booleanChoices.slice(1) : booleanChoices }
       : {}),
     ...(field.schema.type !== "boolean"
       ? {
@@ -67,10 +49,11 @@ function nativeField(
               (value) => {
                 if (value !== undefined) {
                   update(value);
-                  done(displayValue(value === cleared ? undefined : value));
+                  done(formatValue(value === cleared ? undefined : value));
                 } else done();
               },
               report,
+              update,
             ),
         }
       : {}),
@@ -83,8 +66,12 @@ function editComponent(
   keys: KeybindingsManager,
   done: (value?: any) => void,
   report: (message: string) => void,
+  /** Applies a value to the parent row without closing this editor. */
+  apply?: (value: any) => void,
 ): Component {
   const { schema, value, label } = field;
+  // Submenus stay short enough that the parent's search row is never clipped.
+  const submenuRows = Math.max(3, (tui.terminal?.rows ?? 24) - 12);
   const constants = schema.anyOf?.map((item: any) => item.const);
   if (constants?.every((item: any) => typeof item === "string")) {
     return new SettingsList(
@@ -94,7 +81,7 @@ function editComponent(
         currentValue: item === value ? "Selected" : "",
         values: ["Select"],
       })),
-      14,
+      submenuRows,
       getSettingsListTheme(),
       (id) => done(id),
       () => done(),
@@ -103,24 +90,25 @@ function editComponent(
   }
   if (schema.type === "array" && schema.items?.anyOf?.every((item: any) => typeof item.const === "string")) {
     const selected = new Set<string>(value || []);
-    return new SettingsList(
-      [
-        { id: "$done", label: "Done", currentValue: "Apply selection", values: ["Apply"] },
-        ...schema.items.anyOf.map((item: any) => ({
-          id: item.const,
-          label: item.const,
-          currentValue: selected.has(item.const) ? "Yes" : "No",
-          values: ["No", "Yes"],
-        })),
-      ],
-      14,
+    const list = new SettingsList(
+      schema.items.anyOf.map((item: any) => ({
+        id: item.const,
+        label: item.const,
+        currentValue: selected.has(item.const) ? "Yes" : "No",
+        values: ["No", "Yes"],
+      })),
+      submenuRows,
       getSettingsListTheme(),
       (id, next) => {
-        if (id === "$done") done([...selected]);
-        else next === "Yes" ? selected.add(id) : selected.delete(id);
+        // Every toggle applies immediately and the list stays open, so several values can be set.
+        if (next === "Yes") selected.add(id);
+        else selected.delete(id);
+        list.updateValue(id, selected.has(id) ? "Yes" : "No");
+        apply?.([...selected]);
       },
       () => done(),
     );
+    return list;
   }
   if (schema.type === "object" && schema.properties) {
     const values = structuredClone(value || {});
@@ -164,7 +152,7 @@ function editComponent(
     ];
     return new SettingsList(
       items,
-      14,
+      submenuRows,
       getSettingsListTheme(),
       (id, next) => {
         if (id === "$done") done(values);
@@ -177,21 +165,36 @@ function editComponent(
     );
   }
   const json = schema.type === "object" || schema.type === "array";
+  if (!json) {
+    // Scalar fields edit in a single prefilled line instead of the full editor.
+    const input = new Input();
+    input.setValue(value === undefined ? "" : String(value));
+    input.onSubmit = (raw) => {
+      if (!raw.trim()) return done(cleared);
+      done(["number", "integer"].includes(schema.type) ? Number(raw) : raw);
+    };
+    input.onEscape = () => done();
+    const panel = new Container();
+    panel.addChild(new DynamicBorder());
+    panel.addChild(new Text(`${label} (blank clears the field)`, 1, 0));
+    panel.addChild(input);
+    panel.addChild(new Text("Enter to submit  Esc to cancel", 1, 0));
+    panel.addChild(new DynamicBorder());
+    return Object.assign(panel, { handleInput: (data: string) => input.handleInput(data) });
+  }
   return new ExtensionEditorComponent(
     tui,
     keys,
     `${label} (blank clears the field)`,
-    value === undefined ? "" : json ? JSON.stringify(value, null, 2) : String(value),
+    value === undefined ? "" : JSON.stringify(value, null, 2),
     (raw) => {
       if (!raw.trim()) return done(cleared);
-      if (json) {
-        try {
-          done(JSON.parse(raw));
-        } catch {
-          report("Invalid JSON. The field was not changed.");
-          done();
-        }
-      } else done(["number", "integer"].includes(schema.type) ? Number(raw) : raw);
+      try {
+        done(JSON.parse(raw));
+      } catch {
+        report("Invalid JSON. The field was not changed.");
+        done();
+      }
     },
     () => done(),
   );
@@ -205,6 +208,8 @@ export async function settingsPanel(
   onEdit: (id: string, value: any) => Promise<any>,
   signal?: AbortSignal,
   heading?: PanelHeading,
+  /** Handle an action in place. Return true to close the screen, false to keep it open. */
+  onAction?: (id: string) => Promise<boolean>,
 ): Promise<string | undefined> {
   let queue = Promise.resolve();
   let chosen: string | undefined;
@@ -218,11 +223,7 @@ export async function settingsPanel(
       void queue.finally(() => done());
     };
     const abort = () => finish();
-    const report = (message: string) => {
-      queue = queue.then(async () => {
-        await ctx.ui.select(message, ["Back"], { signal });
-      });
-    };
+    const report = (message: string) => ctx.ui.notify(message, "error");
     const edit = (id: string, value: any) => {
       if (closed) return;
       queue = queue
@@ -230,16 +231,24 @@ export async function settingsPanel(
           const actual = await onEdit(id, value);
           const field = fields.find((item) => item.id === id);
           if (field) field.value = actual;
-          list.updateValue(id, displayValue(actual));
+          list.updateValue(id, formatValue(actual));
           tui.requestRender();
         })
-        .catch(async () => {
-          await ctx.ui.select("Could not update the field.", ["Back"], { signal });
-        });
+        .catch(() => report("Could not update the field."));
     };
+    const run = (id: string) => {
+      if (closed) return;
+      queue = queue
+        .then(async () => {
+          if (!onAction || (await onAction(id))) finish(id);
+          else tui.requestRender();
+        })
+        .catch(() => report("Could not complete the action."));
+    };
+    // Keep the search row and the panel heading visible even in short terminals.
+    const maxVisible = Math.max(3, (tui.terminal?.rows ?? 24) - (heading ? 17 : 12));
     const list = new SettingsList(
       [
-        ...fields.map((field) => nativeField(field, tui, keys, (value) => edit(field.id, value), report)),
         ...actions.map((action) => ({
           id: action.id,
           label: action.label,
@@ -247,11 +256,12 @@ export async function settingsPanel(
           description: action.description,
           values: ["Open"],
         })),
+        ...fields.map((field) => nativeField(field, tui, keys, (value) => edit(field.id, value), report)),
       ],
-      16,
+      maxVisible,
       getSettingsListTheme(),
       (id, value) => {
-        if (actions.some((item) => item.id === id)) finish(id);
+        if (actions.some((item) => item.id === id)) run(id);
         else if (fields.find((item) => item.id === id)?.schema.type === "boolean")
           edit(id, value === "Default" ? cleared : value === "Yes");
       },
@@ -272,65 +282,33 @@ export async function settingsPanel(
     panel.addChild(new Spacer(1));
     panel.addChild(list);
     panel.addChild(new DynamicBorder());
-    const dialog = new Box(1, 1);
-    dialog.addChild(panel);
+    const screen = new Box(1, 1);
+    screen.addChild(panel);
     // Forward unchanged input to Pi; the stock container owns layout and mouse dispatch.
-    return Object.assign(dialog, { handleInput: list.handleInput.bind(list) });
+    return Object.assign(screen, { handleInput: list.handleInput.bind(list) });
   });
   await queue;
   return chosen;
 }
 
-export async function selectModels(
+/** Native Pi dialogs. Multi-field forms use `settingsPanel`; one-shot prompts use these. */
+export const selectScreen = (
   ctx: ExtensionContext,
-  candidates: any[],
-  ids: string[],
-  updateSelection: (ids: string[]) => Promise<string[] | undefined>,
-  addManually: () => Promise<{ id: string; name?: string } | undefined>,
+  title: string,
+  options: string[],
   signal?: AbortSignal,
-  context?: string,
-) {
-  const selected = new Set(ids);
-  const models = candidates.map((item) => item.model);
-  while (!signal?.aborted) {
-    const fields = models.map((model) => ({
-      id: `model:${model.id}`,
-      label: model.id,
-      description: `${model.name || model.id}\nModel ID: ${model.id}`,
-      schema: { type: "boolean" },
-      allowDefault: false,
-      value: selected.has(model.id),
-    }));
-    const action = await settingsPanel(
-      ctx,
-      fields,
-      [
-        { id: "$manual", label: "Enter model manually" },
-        { id: "$back", label: "Back to models" },
-      ],
-      async (id, value) => {
-        const modelId = id.slice("model:".length);
-        const next = new Set(selected);
-        if (value === true) next.add(modelId);
-        else next.delete(modelId);
-        const saved = await updateSelection([...next]);
-        if (saved) {
-          selected.clear();
-          for (const id of saved) selected.add(id);
-        }
-        return selected.has(modelId);
-      },
-      signal,
-      { context, title: "Add model" },
-    );
-    if (action === "$manual") {
-      const model = await addManually();
-      if (model) {
-        if (!models.some((item) => item.id === model.id)) models.push(model);
-        selected.add(model.id);
-      }
-      continue;
-    }
-    return;
-  }
-}
+): Promise<string | undefined> => ctx.ui.select(title, options, { signal });
+
+export const inputScreen = (
+  ctx: ExtensionContext,
+  title: string,
+  placeholder?: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> => ctx.ui.input(title, placeholder, { signal });
+
+export const confirmScreen = (
+  ctx: ExtensionContext,
+  title: string,
+  message: string,
+  signal?: AbortSignal,
+): Promise<boolean> => ctx.ui.confirm(title, message, { signal });

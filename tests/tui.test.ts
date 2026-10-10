@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 const piManifestUrl = new URL("../package.json", import.meta.resolve("@earendil-works/pi-coding-agent"));
 const piCli = fileURLToPath(new URL(JSON.parse(readFileSync(piManifestUrl, "utf8")).bin.pi, piManifestUrl));
-import { API_CHOICES } from "../src/pi-catalog";
+import { API_CHOICES } from "../src/domain/catalog";
 import { repo } from "./rpc-helper";
 test("real Pi native terminal controls: create, edit, discard and delete", { timeout: 90000 }, async () => {
   const { stdout } = await promisify(execFile)(

@@ -6,28 +6,6 @@ const RADIUS_API = "pi-messages" as KnownApi;
 export const API_CHOICES: KnownApi[] = loadApiChoices();
 export const OAUTH_PROVIDER_CHOICES: KnownProvider[] = loadOAuthProviderChoices();
 
-/** Include compatibility formats advertised by the Pi version actually hosting the extension. */
-export const THINKING_FORMAT_CHOICES: string[] = [
-  ...new Set([
-    "openai",
-    "openrouter",
-    "deepseek",
-    "together",
-    "zai",
-    "qwen",
-    "chat-template",
-    "qwen-chat-template",
-    "string-thinking",
-    "ant-ling",
-    ...providerCatalog
-      .builtinProviders()
-      .flatMap((provider) =>
-        provider.getModels().map((model) => (model.compat as Record<string, unknown> | undefined)?.thinkingFormat),
-      )
-      .filter((value): value is string => typeof value === "string"),
-  ]),
-];
-
 export function apiLabel(api: KnownApi): string {
   return humanizeId(api);
 }
@@ -46,6 +24,38 @@ export function apiSupportsApiKey(api: KnownApi): boolean {
   return providerCatalog
     .builtinProviders()
     .some((provider) => !!provider.auth?.apiKey && provider.getModels().some((model) => model.api === api));
+}
+
+/** Compat keys Pi actually uses for this API, derived from the built-in model catalog. */
+export function compatFieldNames(api: KnownApi): string[] {
+  const names = new Set<string>();
+  for (const provider of providerCatalog.builtinProviders())
+    for (const model of provider.getModels())
+      if ((model.api as string) === api && model.compat) for (const key of Object.keys(model.compat)) names.add(key);
+  return [...names].sort();
+}
+
+/** String values Pi actually uses for a compat key on this API, e.g. thinkingFormat. */
+export function compatFieldValues(api: KnownApi, field: string): string[] {
+  const values = new Set<string>();
+  for (const provider of providerCatalog.builtinProviders())
+    for (const model of provider.getModels())
+      if ((model.api as string) === api) {
+        const value = (model.compat as Record<string, unknown> | undefined)?.[field];
+        if (typeof value === "string") values.add(value);
+      }
+  return [...values].sort();
+}
+
+/** Thinking-level values Pi actually maps to on this API, derived from the built-in catalog. */
+export function thinkingLevelValues(api: KnownApi): string[] {
+  const values = new Set<string>();
+  for (const provider of providerCatalog.builtinProviders())
+    for (const model of provider.getModels())
+      if ((model.api as string) === api)
+        for (const value of Object.values((model.thinkingLevelMap ?? {}) as Record<string, unknown>))
+          if (typeof value === "string") values.add(value);
+  return [...values].sort((a, b) => a.localeCompare(b));
 }
 
 export function oauthProviderSupportsApi(provider: KnownProvider, api: KnownApi): boolean {

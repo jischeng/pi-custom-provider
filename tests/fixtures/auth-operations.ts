@@ -1,7 +1,9 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Authentication } from "../../src/oauth";
+import { Authentication } from "../../src/extension/adapters/authentication";
 import { ProviderService } from "../../src/domain/service";
-import { registrationChannel } from "../../src/operations/types";
+import { runHeadlessCommand } from "../../src/extension/headless";
+
+/** A second extension exposing its own operations through the same Pi-native headless path. */
 export default function (pi: ExtensionAPI) {
   const authentication = new Authentication(
     getAgentDir(),
@@ -49,6 +51,12 @@ export default function (pi: ExtensionAPI) {
     runtime: { sync: async () => {}, active: () => undefined, busy: () => false },
     discovery: { catalogUrl: null },
   });
-  pi.events.emit(registrationChannel, { namespace: "auth-fixture", operations: service.definitions() });
+  pi.registerCommand("auth-fixture", {
+    description: "Fixture provider operations",
+    handler: async (args, ctx) => {
+      const [operation, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+      await runHeadlessCommand(pi, ctx, service.definitions(), operation, rest.join(" "));
+    },
+  });
   pi.on("session_shutdown", async () => service.dispose());
 }

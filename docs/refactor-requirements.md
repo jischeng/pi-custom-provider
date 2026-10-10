@@ -16,7 +16,9 @@
 
 认证等必须由用户完成的步骤返回 `requires_user_action` 和明确的数据，由客户端决定如何让用户完成；这只是认证流程的一个状态，不意味着普通 RPC 操作要变成交互式向导。通用原生宿主根据操作描述和数据结构适配，不能为本插件写专用协议。
 
-初次设计阶段只交付需求、设计和验收要求。后续已实现本仓库代码与通用桥；没有修改 Pixle 或 Pi 上游，也不表示上游已接受提案。不保留旧向导状态、按键协议或旧私有格式的兼容层。
+初次设计阶段只交付需求、设计和验收要求。后续已实现本仓库代码；没有修改 Pixle 或 Pi 上游，也不表示上游已接受提案。
+
+> 实现变更（晚于本文）：本文中"通用桥 / 自建操作协议 / operationId / requestId / 任务查询与取消"的部分**未按此实现**。程序化调用改为直接使用 Pi 的 RPC 模式，见 [rpc.md](rpc.md)。本文作为历史需求记录保留。
 
 ## 2. 核对基线与证据
 
@@ -33,9 +35,9 @@
 
 ## 3. 当前功能与重构对应入口
 
-设计时的源码基线为上表提交中的 index.ts、wizard.ts、provider-flow.ts、models-config.ts（后三者已在实现中删除），其余模块为 [discovery.ts](../src/discovery.ts)、[oauth.ts](../src/oauth.ts)、[provider-registry.ts](../src/provider-registry.ts)、[pi-catalog.ts](../src/pi-catalog.ts)。
+设计时的源码基线为上表提交中的 index.ts、wizard.ts、provider-flow.ts、models-config.ts（后三者已在实现中删除），其余模块现按职责归档：`src/domain/` 下的 [catalog.ts](../src/domain/catalog.ts)，以及 `src/extension/adapters/` 下的 [discovery.ts](../src/extension/adapters/discovery.ts)、[authentication.ts](../src/extension/adapters/authentication.ts)、[runtime.ts](../src/extension/adapters/runtime.ts)。
 
-下表操作名是**拟新增的共享业务接口**，不是现有 Pi API 或 RPC 命令。终端从 `/provider-setup` 进入；RPC 客户端通过第 7 节通用操作接口直接调用，不经过该命令。
+下表操作名是**拟新增的共享业务接口**，不是现有 Pi API 或 RPC 命令。终端从 `/model-config` 进入；RPC 客户端通过第 7 节通用操作接口直接调用，不经过该命令。
 
 | 当前能力与实际限制 | 重构后的共享操作 | 入口与保留要求 |
 | --- | --- | --- |
@@ -87,7 +89,7 @@ RPC 列表示重构目标，需要第 7 节通用扩展操作协议落地；未�
 
 ### 5.1 模块边界
 
-拟拆分为 `domain/`（数据、校验、草稿和业务操作）、`adapters/pi/`（注册与认证接入）、`adapters/storage/`、`adapters/discovery/`、`entrypoints/`（命令、通用 RPC 操作注册和工具）、`ui/`（终端标准控件适配）。最终文件数量以实现需要为准。
+拟拆分为 `domain/`（数据、校验、草稿和业务操作）、`operations/`（操作注册和执行）、`extension/`（Pi 接入、认证、catalog、发现、RPC、工具和 TUI）。最终文件数量以实现需要为准。
 
 - 业务层不导入 pi-tui，不读取按键，不引用 `WizardState` 或 `ExtensionContext`。
 - 通过依赖传入 Catalog、认证存储、配置存储、HTTP 客户端、时钟、Pi 注册器和取消信号；禁止工具、RPC、界面各自实现保存规则。
@@ -227,7 +229,7 @@ type OperationResult<T> = {
 
 ### 6.1 标准终端流程
 
-`/provider-setup` → 选择供应商或新增 → 选择操作 → 输入/选择字段 → 认证 → 发现或手动模型 → 模型选择与编辑 → 查看摘要 → 确认保存。
+`/model-config` → 选择供应商或新增 → 选择操作 → 输入/选择字段 → 认证 → 发现或手动模型 → 模型选择与编辑 → 查看摘要 → 确认保存。
 
 - 用 `ctx.ui.select` 选择供应商、API、认证方式、字段、模型、预设和操作；`input` 收集单行文本；`editor` 编辑复杂非秘密 JSON；`confirm` 确认保存、删除和取消任务；`notify` 给安全提示。
 - 0.82.0 没有标准多选接口。终端采用“选择模型切换勾选 / 全选当前过滤结果 / 清除当前过滤结果 / 完成”的循环。标签到 ID 的映射仅属于终端适配器，业务层及 RPC 不使用这套字符串协议。
@@ -242,7 +244,7 @@ Pi 0.82.0 RPC 是 stdin/stdout 上的 LF 分隔 JSON。它已有模型、会话�
 | 命令或接口 | 已有能力与本项目边界 |
 | --- | --- |
 | get_commands | 枚举命令名称、说明和来源，没有操作参数、结果或字段 schema |
-| prompt | 可执行 `/provider-setup` 这样的扩展命令，但只接受命令文本，不提供类型化业务参数/结果；不是本方案 RPC 入口 |
+| prompt | 可执行 `/model-config` 这样的扩展命令，但只接受命令文本，不提供类型化业务参数/结果；不是本方案 RPC 入口 |
 | steer/follow_up | 不能执行扩展命令；与管理接口无关 |
 | get_available_models/set_model/cycle_model | 已注册可用模型及当前模型选择；可复用，不能替代远程模型发现或供应商 CRUD |
 | get_state | 会话状态，不包含插件业务任务和草稿 |
@@ -354,7 +356,7 @@ r2 返回 draftId/revision 后，客户端可以自行编辑整张表单，一�
 {"type":"extension_operation_result","operationId":"op3","sequence":2,"result":{"operationId":"op3","status":"cancelled","warnings":[],"effects":{"config":"unchanged","credentials":"unchanged","runtime":"unchanged"}}}
 ```
 
-成功发现时相同终态事件返回 `{items,nextCursor?,warnings}` 中的结构化候选。客户端再直接调用 draft.selectModels、draft.patch、draft.validate、draft.commit；任何业务错误都在结果中表示。最后通过 provider.get 读取持久化 revision，并用已有 get_available_models/set_model 验证注册和当前模型选择。整个流程没有 `/provider-setup`、select/input 弹窗或模型参与。
+成功发现时相同终态事件返回 `{items,nextCursor?,warnings}` 中的结构化候选。客户端再直接调用 draft.selectModels、draft.patch、draft.validate、draft.commit；任何业务错误都在结果中表示。最后通过 provider.get 读取持久化 revision，并用已有 get_available_models/set_model 验证注册和当前模型选择。整个流程没有 `/model-config`、select/input 弹窗或模型参与。
 
 ### 7.5 认证：客户端主动发起的独立操作
 
@@ -394,7 +396,7 @@ auth.begin 只在客户端明确请求认证时执行，复用 Pi AuthInteractio
 | `provider_delete` | providerId、expectedRevision、requestId | 用户确认后删除配置与注册；不清凭据 |
 | `provider_auth_status` | providerId | 仅 AuthSummary |
 
-不注册返回凭据、设置明文 key、粘贴 OAuth JSON、代填授权码、读取任意路径或任意导入导出工具。认证不足时返回 `requires_user_action`、安全原因和用户命令 `/provider-setup`；模型最多说明需要用户登录，不接收 URL 中的 state、设备码、token 或 callback 内容。
+不注册返回凭据、设置明文 key、粘贴 OAuth JSON、代填授权码、读取任意路径或任意导入导出工具。认证不足时返回 `requires_user_action`、安全原因和用户命令 `/model-config`；模型最多说明需要用户登录，不接收 URL 中的 state、设备码、token 或 callback 内容。
 
 工具写入策略：
 
@@ -430,7 +432,7 @@ auth.begin 只在客户端明确请求认证时执行，复用 Pi AuthInteractio
 | --- | --- | --- |
 | 0：评审 | 确认程序接口边界、通用协议补充路径及第 12 节事项 | 需求冻结；尚不改业务代码 |
 | 1：操作与服务 | 数据 schema、草稿、校验、存储、认证、发现、取消；建立公开操作定义 | 服务测试通过，无 TUI/ctx.ui/LLM 依赖 |
-| 2：标准终端 | 重写 `/provider-setup`，删除 WizardState 业务依赖和自动保存 | 真实终端完成操作、取消与错误流程 |
+| 2：标准终端 | 重写 `/model-config`，删除 WizardState 业务依赖和自动保存 | 真实终端完成操作、取消与错误流程 |
 | 3：通用 RPC 能力 | 在 Pi 上游或通用桥加入操作注册/枚举/调用/状态/取消；本插件按通用规范注册 | 客户端直接调用全部必需管理操作，无终端命令和弹窗驱动 |
 | 4：模型工具 | 注册适合模型的操作子集、工具侧确认、结果过滤和错误标记 | 假模型通过真实 agent 调度，业务结果与 RPC/终端一致 |
 | 5：通用宿主验证 | 用操作目录、schema 和任务接口接一个通用原生测试宿主及第二个无关扩展 | 不写插件名称分支；字段、选项、状态、操作和认证可适配 |

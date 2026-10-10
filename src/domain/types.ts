@@ -21,6 +21,23 @@ export interface ModelConfig
   name?: string;
   api?: KnownApi;
   compat?: Record<string, unknown>;
+  /** Pi passes these to the provider request; it is an extensible object, so it is preserved as-is. */
+  samplingParams?: Record<string, unknown>;
+}
+
+/**
+ * A patch Pi applies on top of a built-in model (`modelOverrides` in models.json). It is the
+ * topmost user layer, so it changes only what it names and keeps Pi's own metadata otherwise.
+ */
+export interface ModelOverride
+  extends Partial<
+    Pick<
+      Model<Api>,
+      "name" | "reasoning" | "thinkingLevelMap" | "input" | "contextWindow" | "maxTokens" | "cost" | "headers"
+    >
+  > {
+  compat?: Record<string, unknown>;
+  samplingParams?: Record<string, unknown>;
 }
 
 export interface ProviderConfig {
@@ -38,12 +55,21 @@ export interface ProviderConfig {
   headers?: Record<string, string>;
   authHeader?: boolean;
   compat?: Record<string, unknown>;
+  /** Per-model patches for a provider Pi already ships. Only this field is written for them. */
+  modelOverrides?: Record<string, ModelOverride>;
   models: ModelConfig[];
 }
 
 export interface ModelsConfig {
   providers: Record<string, ProviderConfig>;
 }
+
+/**
+ * A record Pi accepts for a provider it already ships may contain only patches. Its endpoint,
+ * API and model list come from Pi, so the extension must neither register nor rewrite them.
+ */
+export const isOverrideRecord = (provider: Partial<ProviderConfig> | undefined): boolean =>
+  !!provider && !provider.models?.length && !provider.baseUrl && !provider.api;
 
 // ─── Extension-specific ──────────────────────────────────────────
 

@@ -1,7 +1,6 @@
-import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { ProviderService } from "./domain/service";
-import { OperationRegistry } from "./operations/registry";
+import type { ProviderService } from "../domain/service";
+import { runOperation } from "../operations/runner";
 const toolOperations = [
   "provider.list",
   "provider.get",
@@ -33,7 +32,7 @@ export function registerManagementTools(pi: ExtensionAPI, service: ProviderServi
         if (writes) {
           if (!ctx.hasUI)
             return {
-              content: [{ type: "text", text: "User confirmation is required. Use /provider-setup." }],
+              content: [{ type: "text", text: "User confirmation is required. Use /model-config." }],
               details: unexecuted("requires_user_action"),
             };
           const confirmed = await ctx.ui.confirm(operation.title, JSON.stringify(args, null, 2), { signal });
@@ -43,23 +42,14 @@ export function registerManagementTools(pi: ExtensionAPI, service: ProviderServi
               details: unexecuted("cancelled"),
             };
         }
-        const registry = new OperationRegistry((event) => {
-          if (event.type === "extension_operation_update")
-            onUpdate?.({ content: [{ type: "text", text: operation.title }], details: { stage: event.stage } });
+        const result = await runOperation(service.definitions(), operation.name, args, {
+          caller: "model_tool",
+          signal: signal ?? new AbortController().signal,
+          prompt: async () => "",
+          notify: (request) => onUpdate?.({ content: [{ type: "text", text: request.message }], details: {} }),
+          progress: (stage) => onUpdate?.({ content: [{ type: "text", text: operation.title }], details: { stage } }),
         });
-        registry.register("provider-manager", service.definitions());
-        try {
-          const result = await registry.invoke(
-            `provider-manager/${operation.name}`,
-            args,
-            "model_tool",
-            undefined,
-            signal,
-          ).done;
-          return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
-        } finally {
-          await registry.dispose();
-        }
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
     });
   }
@@ -72,7 +62,6 @@ export function registerManagementTools(pi: ExtensionAPI, service: ProviderServi
 
 function unexecuted(status: "cancelled" | "requires_user_action") {
   return {
-    operationId: randomUUID(),
     status,
     error: {
       code: status === "cancelled" ? "CANCELLED" : "USER_ACTION_REQUIRED",

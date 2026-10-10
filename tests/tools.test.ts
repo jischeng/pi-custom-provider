@@ -6,7 +6,7 @@ import { rpc, repo } from "./rpc-helper";
 
 test("real Pi agent dispatches management tools, reports errors and confirms writes", async () => {
   const names = ["provider_list", "provider_get", "provider_create"];
-  const p = await rpc(true, ["-e", path.join(repo, "tests/fixtures/tool-model.ts"), "--tools", names.join(",")]);
+  const p = await rpc(["-e", path.join(repo, "tests/fixtures/tool-model.ts"), "--tools", names.join(",")]);
   try {
     assert.equal((await p.command("set_model", { provider: "fixture-agent", modelId: "fixture" })).success, true);
     async function call(name: string, args: any, confirm?: boolean) {
